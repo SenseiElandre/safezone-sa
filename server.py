@@ -367,6 +367,21 @@ def push_public_key():
         return jsonify(ok=False,message='Emergency push alerts are not configured yet.'),503
     return jsonify(ok=True,public_key=key)
 
+@app.get('/api/push/status')
+@login_required
+def push_status():
+    c=db(); row=c.execute('SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id=?',(current_user()['id'],)).fetchone(); c.close()
+    configured=bool(os.environ.get('VAPID_PUBLIC_KEY','').strip() and os.environ.get('VAPID_PRIVATE_KEY','').strip())
+    return jsonify(ok=True,configured=configured,subscriptions=int(row['n'] or 0))
+
+@app.post('/api/push/test-self')
+@login_required
+def push_test_self():
+    sent=send_push_to_user(current_user()['id'], {'type':'test','title':'🔔 SAFEZONE TEST ALARM','body':'Emergency alarms are working on this phone.','url':'/emergency'})
+    if sent:
+        return jsonify(ok=True,message='Test alarm sent.')
+    return jsonify(ok=False,message='This phone has not been registered for emergency alarms yet, or the push service rejected the subscription.'),400
+
 @app.post('/api/push/subscribe')
 @login_required
 def push_subscribe():
@@ -488,15 +503,27 @@ def emergency_start():
     for raw in (data.get('circle_member_ids') or []):
         try: selected.append(int(raw))
         except (TypeError,ValueError): pass
-    c=db()
-    cur=c.execute('INSERT INTO emergency_events(user_id,latitude,longitude,created_at) VALUES(?,?,?,?) RETURNING id',(u['id'],lat,lon,now()))
-    event_id=cur.fetchone()['id']
-    contacts=c.execute('SELECT * FROM contacts WHERE user_id=? ORDER BY id',(u['id'],)).fetchall()
-    linked_targets=[]
-    if selected:
-        linked_targets=c.execute("""SELECT DISTINCT u.id,u.name FROM contacts ct JOIN users u ON u.id=ct.linked_user_id
-                                    WHERE ct.user_id=? AND ct.linked_user_id IS NOT NULL AND ct.linked_user_id = ANY(%s)""",(selected,)).fetchall()
-    c.commit(); c.close()
+    c=None
+    try:
+        c=db()
+        cur=c.execute('INSERT INTO emergency_events(user_id,latitude,longitude,created_at) VALUES(?,?,?,?) RETURNING id',(u['id'],lat,lon,now()))
+        event_id=cur.fetchone()['id']
+        contacts=c.execute('SELECT * FROM contacts WHERE user_id=? ORDER BY id',(u['id'],)).fetchall()
+        linked_targets=[]
+        if selected:
+            linked_targets=c.execute("""SELECT DISTINCT u.id,u.name FROM contacts ct JOIN users u ON u.id=ct.linked_user_id
+                                        WHERE ct.user_id=? AND ct.linked_user_id IS NOT NULL AND ct.linked_user_id = ANY(%s)""",(selected,)).fetchall()
+        c.commit()
+    except Exception:
+        if c:
+            try: c.rollback(); c.close()
+            except Exception: pass
+        app.logger.exception('Emergency activation database error')
+        return jsonify(ok=False,message='SafeZone could not record the emergency. Please try again.'),500
+    finally:
+        if c:
+            try: c.close()
+            except Exception: pass
     location=f'https://www.google.com/maps?q={lat},{lon}' if lat is not None and lon is not None else ''
     message=f'SAFEZONE SA EMERGENCY: {u["name"]} may need help. Location: {location}' if location else f'SAFEZONE SA EMERGENCY: {u["name"]} may need help. Please contact them immediately.'
     notified=[]
@@ -504,7 +531,8 @@ def emergency_start():
         phone=''.join(ch for ch in x['phone'] if ch.isdigit() or ch=='+'); sms=f'sms:{phone}?body='+quote(message); wa='https://wa.me/'+''.join(ch for ch in phone if ch.isdigit())+'?text='+quote(message); notified.append({'name':x['name'],'phone':x['phone'],'sms':sms,'whatsapp':wa,'linked_user_id':x['linked_user_id']})
     push_count=0
     for target in linked_targets:
-        push_count += send_push_to_user(target['id'], {'type':'emergency','event_id':event_id,'title':'🚨 SAFEZONE EMERGENCY','body':f'{u["name"]} activated an emergency. Check on them immediately.','url':'/emergency'})
+        try: push_count += send_push_to_user(target['id'], {'type':'emergency','event_id':event_id,'title':'🚨 SAFEZONE EMERGENCY','body':f'{u["name"]} activated an emergency. Check on them immediately.','url':'/emergency'})
+        except Exception: app.logger.exception('Emergency push send failed for user %s', target['id'])
     return jsonify(ok=True,event_id=event_id,message='Emergency mode activated.',numbers=EMERGENCY,contacts=notified,location=location,push_count=push_count)
 
 @app.post('/api/emergency/resolve')

@@ -53,5 +53,5 @@ Each Trusted Circle member must log in on their phone and tap **Enable Emergency
 - Journey arrival time is displayed in the user device local time while stored consistently on the server.
 
 
-## v32 PWA install fix
+## v33 PWA install fix
 The web app manifest is now explicitly linked from the main HTML and the service-worker cache-busting version is updated. This restores Android browser install/Add to Home Screen eligibility after deployment.

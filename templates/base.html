@@ -3,4 +3,4 @@
 {% with messages=get_flashed_messages(with_categories=true) %}{% if messages %}<div class="flash-wrap">{% for cat,msg in messages %}<div class="flash {{cat}}">{{msg}}</div>{% endfor %}</div>{% endif %}{% endwith %}
 <main>{% block content %}{% endblock %}</main><footer class="footer"><a href="{{url_for('privacy')}}">Privacy</a><span>•</span><a href="{{url_for('safety_tips')}}">Safety tips</a></footer>
 <nav class="bottom"><a href="{{url_for('home')}}">⌂<small>Home</small></a><a href="{{url_for('alerts')}}">📢<small>Alerts</small></a><a class="panic" href="{{url_for('emergency')}}">SOS<small>Emergency</small></a><a href="{{url_for('contacts')}}">👥<small>Circle</small></a></nav>
-<script>window.SAFEZONE_CSRF={{csrf_token|tojson}};</script><script src="{{url_for('static',filename='js/app.js')}}"></script></body></html>
+<script>window.SAFEZONE_CSRF={{csrf_token|tojson}};</script><script src="{{url_for('static',filename='js/app.js', v=33)}}"></script></body></html>
