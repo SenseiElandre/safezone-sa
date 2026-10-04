@@ -72,6 +72,16 @@ def init_db():
       id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, area TEXT,
       latitude REAL, longitude REAL, created_at TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id)
     );
+    CREATE TABLE IF NOT EXISTS safety_journeys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      destination TEXT NOT NULL,
+      expected_at TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      completed_at TEXT,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
     CREATE TABLE IF NOT EXISTS emergency_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, latitude REAL, longitude REAL,
       status TEXT NOT NULL DEFAULT 'ACTIVE', created_at TEXT NOT NULL, resolved_at TEXT,
@@ -420,6 +430,74 @@ def circle_status():
     def item(r):
         return {'id':r['id'],'name':r['name'],'email':r['email'],'area':r['area'],'last_checkin':r['last_checkin'],'latitude':r['latitude'],'longitude':r['longitude']}
     return jsonify(ok=True,checked_in={'last_checkin':own['created_at'] if own else None,'latitude':own['latitude'] if own else None,'longitude':own['longitude'] if own else None},members=[item(r) for r in rows])
+
+@app.route('/checkin')
+@subscription_required
+def checkin_page():
+    u=current_user()
+    c=db()
+    active=c.execute("""SELECT * FROM safety_journeys
+                        WHERE user_id=? AND status='active'
+                        ORDER BY id DESC LIMIT 1""",(u['id'],)).fetchone()
+    c.close()
+    return render_template('checkin.html', active=active)
+
+@app.post('/api/journey/start')
+@subscription_required
+def journey_start():
+    u=current_user()
+    data=request.get_json(silent=True) or {}
+    destination=(data.get('destination') or '').strip()
+    try: minutes=int(data.get('minutes') or 30)
+    except (TypeError, ValueError): minutes=30
+    if not destination:
+        return jsonify(ok=False,message='Please enter where you are going.'),400
+    if minutes not in {15,30,45,60,90,120,180}:
+        return jsonify(ok=False,message='Please choose a valid check-in time.'),400
+    c=db()
+    existing=c.execute("SELECT id FROM safety_journeys WHERE user_id=? AND status='active' LIMIT 1",(u['id'],)).fetchone()
+    if existing:
+        c.close(); return jsonify(ok=False,message='You already have an active journey.'),400
+    started=datetime.now(); expected=started+timedelta(minutes=minutes)
+    c.execute("""INSERT INTO safety_journeys(user_id,destination,expected_at,started_at,status)
+                 VALUES(?,?,?,?,?)""",(u['id'],destination,expected.strftime('%Y-%m-%d %H:%M:%S'),
+                 started.strftime('%Y-%m-%d %H:%M:%S'),'active'))
+    c.commit(); c.close()
+    return jsonify(ok=True,expected_at=expected.strftime('%Y-%m-%d %H:%M:%S'))
+
+@app.post('/api/journey/complete')
+@subscription_required
+def journey_complete():
+    u=current_user(); c=db()
+    c.execute("""UPDATE safety_journeys SET status='completed', completed_at=?
+                 WHERE user_id=? AND status='active'""",(now(),u['id']))
+    c.commit(); c.close()
+    return jsonify(ok=True,message="You're marked as safely arrived.")
+
+@app.get('/api/circle-journeys')
+@subscription_required
+def circle_journeys():
+    u=current_user(); c=db()
+    rows=c.execute("""SELECT u.id,u.name,sj.destination,sj.started_at,sj.expected_at,
+                             c.phone
+                      FROM trusted_links tl
+                      JOIN users u ON u.id=tl.trusted_user_id
+                      JOIN safety_journeys sj ON sj.user_id=u.id AND sj.status='active'
+                      LEFT JOIN contacts c ON c.user_id=? AND c.linked_user_id=u.id
+                      WHERE tl.user_id=?
+                      ORDER BY sj.expected_at ASC""",(u['id'],u['id'])).fetchall()
+    c.close(); out=[]
+    for r in rows:
+        expected=datetime.strptime(r['expected_at'],'%Y-%m-%d %H:%M:%S')
+        overdue=expected < datetime.now()
+        phone=''.join(ch for ch in (r['phone'] or '') if ch.isdigit() or ch=='+')
+        msg=f"Hi {r['name']}, I'm checking in because SafeZone shows your journey to {r['destination']} is {'overdue' if overdue else 'active'}. Are you okay?"
+        digits=''.join(ch for ch in phone if ch.isdigit())
+        out.append({'name':r['name'],'destination':r['destination'],'started_at':r['started_at'],
+                    'expected_at':r['expected_at'],'overdue':overdue,
+                    'sms':('sms:'+phone+'?body='+quote(msg)) if phone else '',
+                    'whatsapp':('https://wa.me/'+digits+'?text='+quote(msg)) if digits else ''})
+    return jsonify(ok=True,journeys=out)
 
 @app.route('/alerts')
 @subscription_required
