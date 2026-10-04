@@ -25,6 +25,14 @@ EMERGENCY = [
     ('Emergency from mobile', '112', 'Emergency number from mobile phones'),
 ]
 
+# Starter South African town list. "Other" is available for towns not yet listed.
+TOWNS = [
+    'Despatch', 'Kariega', 'Gqeberha', 'Jeffreys Bay', 'Humansdorp',
+    'St Francis Bay', 'Addo', 'Kirkwood', 'Patensie', 'Port Alfred',
+    'Grahamstown', 'Makhanda', 'East London', 'King William’s Town',
+    'Somerset East', 'Graaff-Reinet', 'Cradock', 'Other'
+]
+
 def db():
     c = sqlite3.connect(DB)
     c.row_factory = sqlite3.Row
@@ -116,17 +124,22 @@ def headers(resp):
 @app.context_processor
 def inject():
     if not session.get('csrf_token'): session['csrf_token']=secrets.token_urlsafe(24)
-    return {'user': current_user(), 'emergency_numbers': EMERGENCY, 'csrf_token': session['csrf_token']}
+    return {'user': current_user(), 'emergency_numbers': EMERGENCY, 'csrf_token': session['csrf_token'], 'towns': TOWNS}
 
 @app.route('/')
 def home():
-    c=db(); alerts=c.execute("SELECT * FROM alerts WHERE status!='Rejected' ORDER BY id DESC LIMIT 5").fetchall(); c.close()
-    return render_template('index.html', alerts=alerts)
+    u=current_user()
+    town=(u['area'] if u else request.args.get('town','Despatch')).strip() or 'Despatch'
+    c=db()
+    alerts=c.execute("SELECT * FROM alerts WHERE status!='Rejected' AND lower(area)=lower(?) ORDER BY id DESC LIMIT 5",(town,)).fetchall()
+    c.close()
+    return render_template('index.html', alerts=alerts, town=town)
 
 @app.route('/register', methods=['GET','POST'])
 def register():
     if request.method=='POST':
-        name=request.form.get('name','').strip(); email=request.form.get('email','').strip().lower(); pw=request.form.get('password',''); area=request.form.get('area','Despatch').strip()
+        name=request.form.get('name','').strip(); email=request.form.get('email','').strip().lower(); pw=request.form.get('password',''); area=request.form.get('area','Despatch').strip() or 'Despatch'
+        if area == 'Other': area=request.form.get('other_area','').strip() or 'Other'
         if not name or not email or len(pw)<8: flash('Please complete all fields. Password must be at least 8 characters.','error'); return render_template('register.html')
         c=db()
         try:
@@ -202,25 +215,39 @@ def checkin():
 
 @app.route('/alerts')
 def alerts():
-    c=db(); rows=c.execute("SELECT a.*,u.name reporter FROM alerts a LEFT JOIN users u ON u.id=a.user_id WHERE a.status!='Rejected' ORDER BY a.id DESC").fetchall(); c.close(); return render_template('alerts.html',alerts=rows)
+    u=current_user()
+    town=(u['area'] if u else request.args.get('town','Despatch')).strip() or 'Despatch'
+    c=db()
+    rows=c.execute("SELECT a.*,u.name reporter FROM alerts a LEFT JOIN users u ON u.id=a.user_id WHERE a.status!='Rejected' AND lower(a.area)=lower(?) ORDER BY a.id DESC",(town,)).fetchall()
+    c.close()
+    return render_template('alerts.html',alerts=rows,town=town)
 
 @app.route('/report',methods=['GET','POST'])
 @login_required
 def report():
+    u=current_user()
     if request.method=='POST':
-        cat=request.form.get('category','Safety'); area=request.form.get('area','Despatch'); title=request.form.get('title','').strip(); body=request.form.get('body','').strip()
+        cat=request.form.get('category','Safety')
+        area=request.form.get('area',u['area']).strip() or u['area']
+        if area == 'Other': area=request.form.get('other_area','').strip() or 'Other'
+        title=request.form.get('title','').strip(); body=request.form.get('body','').strip()
         if title and body:
-            c=db(); c.execute('INSERT INTO alerts(user_id,category,area,title,body,status,created_at) VALUES(?,?,?,?,?,?,?)',(current_user()['id'],cat,area,title,body,'Reported — Unverified',now())); c.commit(); c.close(); flash('Report submitted for review.','success'); return redirect(url_for('alerts'))
+            c=db(); c.execute('INSERT INTO alerts(user_id,category,area,title,body,status,created_at) VALUES(?,?,?,?,?,?,?)',(u['id'],cat,area,title,body,'Reported — Unverified',now())); c.commit(); c.close(); flash('Report submitted for review.','success'); return redirect(url_for('alerts'))
     return render_template('report.html')
 
 @app.route('/resources')
 def resources():
-    c=db(); rows=c.execute('SELECT * FROM resources ORDER BY category,name').fetchall(); c.close(); return render_template('resources.html',places=rows)
+    u=current_user()
+    town=(u['area'] if u else request.args.get('town','Despatch')).strip() or 'Despatch'
+    c=db(); rows=c.execute("SELECT * FROM resources WHERE verified=1 AND (lower(area)=lower(?) OR lower(area)='south africa') ORDER BY category,name",(town,)).fetchall(); c.close()
+    return render_template('resources.html',places=rows,town=town)
 
 @app.route('/map')
 def safety_map():
-    c=db(); rows=c.execute('SELECT * FROM resources WHERE verified=1 ORDER BY category,name').fetchall(); c.close()
-    return render_template('map.html', places=rows)
+    u=current_user()
+    town=(u['area'] if u else request.args.get('town','Despatch')).strip() or 'Despatch'
+    c=db(); rows=c.execute("SELECT * FROM resources WHERE verified=1 AND (lower(area)=lower(?) OR lower(area)='south africa') ORDER BY category,name",(town,)).fetchall(); c.close()
+    return render_template('map.html', places=rows, town=town)
 
 # Named endpoints kept aligned with template links.
 # The aliases below prevent Jinja BuildError failures on shared navigation.
@@ -232,9 +259,17 @@ def safety_tips():
 def privacy():
     return render_template('privacy.html')
 
-@app.route('/profile')
+@app.route('/profile', methods=['GET','POST'])
 @login_required
-def profile(): return render_template('profile.html')
+def profile():
+    u=current_user()
+    if request.method=='POST':
+        area=request.form.get('area',u['area']).strip() or u['area']
+        if area == 'Other': area=request.form.get('other_area','').strip() or 'Other'
+        c=db(); c.execute('UPDATE users SET area=? WHERE id=?',(area,u['id'])); c.commit(); c.close()
+        flash('Your town has been updated.','success')
+        return redirect(url_for('profile'))
+    return render_template('profile.html')
 
 # Template navigation historically referenced the endpoint name 'map'.
 # Keep the public /map URL while exposing that endpoint name explicitly.

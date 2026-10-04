@@ -1,1 +1,13 @@
-{% extends 'base.html' %}{% block content %}<section class="section"><div class="eyebrow">MY SAFEZONE</div><h1>{{user['name']}}</h1><div class="profile-card"><b>{{user['email']}}</b><span>📍 {{user['area']}}</span><span>🛡️ Account protected by SafeZone SA</span></div><a class="secondary" href="{{url_for('contacts')}}">Manage Trusted Circle</a>{% if user['role']=='admin' %}<a class="secondary" href="{{url_for('admin')}}">Open Admin Centre</a>{% endif %}</section>{% endblock %}
+{% extends 'base.html' %}{% block content %}
+<section class="section"><div class="eyebrow">MY SAFEZONE</div><h1>{{user['name']}}</h1>
+<div class="profile-card"><b>{{user['email']}}</b><span>📍 {{user['area']}}</span><span>🛡️ Account protected by SafeZone SA</span></div>
+<h2>Your town</h2><p>Community Alerts and local resources are filtered to this town.</p>
+<form class="form" method="post"><input type="hidden" name="_csrf" value="{{csrf_token}}">
+<select name="area" id="profile-town" onchange="toggleProfileOther()">{% for t in towns %}<option value="{{t}}" {% if t==user['area'] %}selected{% endif %}>{{t}}</option>{% endfor %}</select>
+<input name="other_area" id="profile-other-town" placeholder="Enter your town" style="display:none">
+<button class="primary">Save town</button></form>
+<a class="secondary" href="{{url_for('contacts')}}">Manage Trusted Circle</a>
+{% if user['role']=='admin' %}<a class="secondary" href="{{url_for('admin')}}">Open Admin Centre</a>{% endif %}
+</section>
+<script>function toggleProfileOther(){document.getElementById('profile-other-town').style.display=document.getElementById('profile-town').value==='Other'?'block':'none';}toggleProfileOther();</script>
+{% endblock %}

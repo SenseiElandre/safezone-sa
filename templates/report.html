@@ -1,1 +1,11 @@
-{% extends 'base.html' %}{% block content %}<section class="section"><div class="eyebrow">COMMUNITY SAFETY</div><h1>Report an incident</h1><p>Only submit information you believe is accurate. Reports are reviewed before being marked verified.</p><form class="form" method="post"><input type="hidden" name="_csrf" value="{{csrf_token}}"><select name="category"><option>Safety</option><option>Road Hazard</option><option>Suspicious Activity</option><option>Missing Person</option><option>Other</option></select><input name="area" value="{{user['area']}}" required><input name="title" placeholder="Short title" required><textarea name="body" placeholder="What happened? Include useful facts, but don't post private information." required></textarea><button class="primary">Submit report</button></form></section>{% endblock %}
+{% extends 'base.html' %}{% block content %}
+<section class="section"><div class="eyebrow">COMMUNITY SAFETY</div><h1>Report an incident</h1>
+<p>Reports are attached to a town and reviewed before being marked verified.</p>
+<form class="form" method="post"><input type="hidden" name="_csrf" value="{{csrf_token}}">
+<select name="category"><option>Safety</option><option>Road Hazard</option><option>Suspicious Activity</option><option>Missing Person</option><option>Other</option></select>
+<label>Incident town</label><select name="area" id="report-town" onchange="toggleReportOther()">{% for t in towns %}<option value="{{t}}" {% if t==user['area'] %}selected{% endif %}>{{t}}</option>{% endfor %}</select>
+<input name="other_area" id="report-other-town" placeholder="Enter incident town" style="display:none">
+<input name="title" placeholder="Short title" required><textarea name="body" placeholder="What happened? Include useful facts, but don't post private information." required></textarea>
+<button class="primary">Submit report</button></form></section>
+<script>function toggleReportOther(){document.getElementById('report-other-town').style.display=document.getElementById('report-town').value==='Other'?'block':'none';}</script>
+{% endblock %}
