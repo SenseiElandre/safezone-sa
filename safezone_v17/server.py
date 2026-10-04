@@ -77,10 +77,6 @@ def init_db():
       status TEXT NOT NULL DEFAULT 'ACTIVE', created_at TEXT NOT NULL, resolved_at TEXT,
       FOREIGN KEY(user_id) REFERENCES users(id)
     );
-    CREATE TABLE IF NOT EXISTS resources (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, category TEXT NOT NULL,
-      area TEXT NOT NULL, phone TEXT, address TEXT, verified INTEGER DEFAULT 1
-    );
     CREATE TABLE IF NOT EXISTS subscriptions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER UNIQUE NOT NULL,
@@ -133,17 +129,10 @@ def init_db():
     )''')
     c.execute("UPDATE subscriptions SET gateway='eft' WHERE gateway IS NULL OR gateway!='eft'")
     if c.execute('SELECT COUNT(*) n FROM users').fetchone()['n'] == 0:
-        admin_email = os.environ.get('ADMIN_EMAIL', 'admin@safezone.local').strip().lower()
-        admin_password = os.environ.get('ADMIN_PASSWORD', 'ChangeMe123!')
+        admin_email = os.environ.get('ADMIN_EMAIL', 'Elandre007').strip().lower()
+        admin_password = os.environ.get('ADMIN_PASSWORD', 'Tysonboesman123')
         c.execute('INSERT INTO users(name,email,password,role,area,created_at) VALUES(?,?,?,?,?,?)',
                   ('SafeZone Admin',admin_email,generate_password_hash(admin_password),'admin','Despatch',now()))
-    if c.execute('SELECT COUNT(*) n FROM resources').fetchone()['n'] == 0:
-        c.executemany('INSERT INTO resources(name,category,area,phone,address) VALUES(?,?,?,?,?)', [
-            ('SAPS Despatch','Police','Despatch','10111','Despatch, Eastern Cape'),
-            ('Emergency Medical Services','Medical','South Africa','10177','Eastern Cape'),
-            ('Mobile Emergency Services','Emergency','South Africa','112','South Africa'),
-            ('Emergency from mobile','Emergency','South Africa','112','South Africa'),
-        ])
     c.commit(); c.close()
 
 def current_user():
@@ -434,19 +423,6 @@ def report():
             c=db(); c.execute('INSERT INTO alerts(user_id,category,area,title,body,status,created_at) VALUES(?,?,?,?,?,?,?)',(u['id'],cat,area,title,body,'Reported — Unverified',now())); c.commit(); c.close(); flash('Report submitted for review.','success'); return redirect(url_for('alerts'))
     return render_template('report.html')
 
-@app.route('/resources')
-@subscription_required
-def resources():
-    # Local emergency-service locations have been removed because SafeZone does not
-    # want to publish potentially inaccurate addresses. Emergency numbers remain
-    # available from the Emergency page.
-    return redirect(url_for('emergency'))
-
-@app.route('/map')
-def removed_map():
-    # The map feature has been removed from SafeZone. Keep this redirect so old
-    # bookmarks/links do not produce a broken page.
-    return redirect(url_for('home'))
 
 @app.route('/safety')
 def safety_tips(): return render_template('safety_tips.html')

@@ -1,3 +1,14 @@
+// SafeZone v20: remove legacy map/PWA caches and unregister old service workers.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', async () => {
+    try {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      for (const reg of regs) await reg.unregister();
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k)));
+    } catch (e) {}
+  });
+}
 async function getLocation(){
   return new Promise(resolve=>{
     if(!navigator.geolocation) return resolve({});
