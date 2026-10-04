@@ -129,10 +129,10 @@ def init_db():
     )''')
     c.execute("UPDATE subscriptions SET gateway='eft' WHERE gateway IS NULL OR gateway!='eft'")
     if c.execute('SELECT COUNT(*) n FROM users').fetchone()['n'] == 0:
-        admin_email = os.environ.get('ADMIN_EMAIL', 'Elandre007').strip().lower()
+        admin_username = os.environ.get('ADMIN_EMAIL', 'Elandre007').strip().lower()
         admin_password = os.environ.get('ADMIN_PASSWORD', 'Tysonboesman123')
         c.execute('INSERT INTO users(name,email,password,role,area,created_at) VALUES(?,?,?,?,?,?)',
-                  ('SafeZone Admin',admin_email,generate_password_hash(admin_password),'admin','Despatch',now()))
+                  ('SafeZone Admin',admin_username,generate_password_hash(admin_password),'admin','Despatch',now()))
     c.commit(); c.close()
 
 def current_user():
@@ -278,7 +278,7 @@ def admin_security():
             flash('Please enter a valid admin name.','error')
             return render_template('admin_security.html')
         if '@' not in new_email or '.' not in new_email.split('@')[-1]:
-            flash('Please enter a valid admin email address.','error')
+            flash('Please enter a valid admin username address.','error')
             return render_template('admin_security.html')
         if len(new_password) < 8:
             flash('New password must be at least 8 characters.','error')
