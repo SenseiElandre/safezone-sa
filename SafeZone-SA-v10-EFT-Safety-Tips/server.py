@@ -413,6 +413,64 @@ def admin():
     subs=c.execute("SELECT s.*,u.name,u.email,u.area FROM subscriptions s JOIN users u ON u.id=s.user_id WHERE u.role!='admin' ORDER BY CASE s.status WHEN 'expired' THEN 0 WHEN 'inactive' THEN 1 WHEN 'suspended' THEN 2 ELSE 3 END, s.paid_until ASC").fetchall()
     c.close(); return render_template('admin.html',stats=stats,alerts=alerts,subs=subs)
 
+@app.route('/admin/users')
+@admin_required
+def admin_users():
+    q=request.args.get('q','').strip()
+    c=db()
+    if q:
+        like=f'%{q}%'
+        rows=c.execute("SELECT u.*, s.status sub_status, s.paid_until, s.last_payment_at, s.access_enabled FROM users u LEFT JOIN subscriptions s ON s.user_id=u.id WHERE u.role!='admin' AND (u.name LIKE ? OR u.email LIKE ? OR u.area LIKE ?) ORDER BY u.name COLLATE NOCASE",(like,like,like)).fetchall()
+    else:
+        rows=c.execute("SELECT u.*, s.status sub_status, s.paid_until, s.last_payment_at, s.access_enabled FROM users u LEFT JOIN subscriptions s ON s.user_id=u.id WHERE u.role!='admin' ORDER BY u.name COLLATE NOCASE").fetchall()
+    users=[]
+    for u in rows:
+        ensure_subscription(u['id'])
+        refresh_membership(u['id'])
+        sub=subscription_row(u['id'])
+        payments=c.execute('SELECT * FROM payment_events WHERE user_id=? ORDER BY id DESC LIMIT 10',(u['id'],)).fetchall()
+        users.append({'user':u,'sub':sub,'payments':payments})
+    c.close()
+    return render_template('admin_users.html',users=users,q=q)
+
+@app.post('/admin/user/<int:user_id>/action')
+@admin_required
+def admin_user_action(user_id):
+    action=request.form.get('action','')
+    s=ensure_subscription(user_id)
+    if action=='activate':
+        if not s['paid_until']:
+            flash('No paid-through date exists. Record the EFT payment first.','error')
+        else:
+            try:
+                if datetime.strptime(s['paid_until'],'%Y-%m-%d %H:%M:%S') >= datetime.now():
+                    upsert_subscription(user_id,status='active',access_enabled=1)
+                    flash('Access activated.','success')
+                else:
+                    flash('Membership has expired. Record the new EFT payment first.','error')
+            except ValueError:
+                flash('Invalid membership expiry date.','error')
+    elif action=='deactivate':
+        upsert_subscription(user_id,status='suspended',access_enabled=0)
+        flash('Access disabled.','success')
+    elif action=='paid':
+        paid_at=now()
+        paid_until=(datetime.now()+timedelta(days=MEMBERSHIP_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
+        reference=request.form.get('reference','').strip() or 'EFT'
+        upsert_subscription(user_id,status='active',gateway='eft',amount=SUBSCRIPTION_AMOUNT_CENTS,started_at=s['started_at'] or paid_at,paid_until=paid_until,last_payment_at=paid_at,cancelled_at=None,access_enabled=1)
+        record_payment(user_id,'eft.payment',reference,SUBSCRIPTION_AMOUNT_CENTS,'success',{'method':'EFT','reference':reference,'paid_at':paid_at,'paid_until':paid_until})
+        flash('Payment recorded and 30 days added.','success')
+    elif action=='extend':
+        base=datetime.now()
+        if s['paid_until']:
+            try: base=max(base,datetime.strptime(s['paid_until'],'%Y-%m-%d %H:%M:%S'))
+            except ValueError: pass
+        paid_until=(base+timedelta(days=MEMBERSHIP_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
+        upsert_subscription(user_id,status='active',gateway='eft',amount=SUBSCRIPTION_AMOUNT_CENTS,paid_until=paid_until,last_payment_at=now(),access_enabled=1)
+        record_payment(user_id,'eft.manual_extension','MANUAL',SUBSCRIPTION_AMOUNT_CENTS,'success',{'method':'Manual extension','paid_until':paid_until})
+        flash('30 days added to the membership.','success')
+    return redirect(url_for('admin_users',q=request.form.get('q','').strip()))
+
 @app.post('/admin/subscription/<int:user_id>')
 @admin_required
 def admin_subscription(user_id):
