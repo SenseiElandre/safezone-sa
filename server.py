@@ -222,9 +222,23 @@ def safety_map():
     c=db(); rows=c.execute('SELECT * FROM resources WHERE verified=1 ORDER BY category,name').fetchall(); c.close()
     return render_template('map.html', places=rows)
 
+# Named endpoints kept aligned with template links.
+# The aliases below prevent Jinja BuildError failures on shared navigation.
+@app.route('/safety')
+def safety_tips():
+    return render_template('safety_tips.html')
+
+@app.route('/privacy')
+def privacy():
+    return render_template('privacy.html')
+
 @app.route('/profile')
 @login_required
 def profile(): return render_template('profile.html')
+
+# Template navigation historically referenced the endpoint name 'map'.
+# Keep the public /map URL while exposing that endpoint name explicitly.
+app.add_url_rule('/map', endpoint='map', view_func=safety_map)
 
 @app.route('/admin')
 @admin_required
