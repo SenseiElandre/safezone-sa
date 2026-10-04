@@ -116,8 +116,10 @@ def init_db():
             c.execute(sql)
     c.execute("UPDATE subscriptions SET gateway='eft' WHERE gateway IS NULL OR gateway!='eft'")
     if c.execute('SELECT COUNT(*) n FROM users').fetchone()['n'] == 0:
+        admin_email = os.environ.get('ADMIN_EMAIL', 'admin@safezone.local').strip().lower()
+        admin_password = os.environ.get('ADMIN_PASSWORD', 'ChangeMe123!')
         c.execute('INSERT INTO users(name,email,password,role,area,created_at) VALUES(?,?,?,?,?,?)',
-                  ('SafeZone Admin','admin@safezone.local',generate_password_hash('ChangeMe123!'),'admin','Despatch',now()))
+                  ('SafeZone Admin',admin_email,generate_password_hash(admin_password),'admin','Despatch',now()))
     if c.execute('SELECT COUNT(*) n FROM resources').fetchone()['n'] == 0:
         c.executemany('INSERT INTO resources(name,category,area,phone,address) VALUES(?,?,?,?,?)', [
             ('SAPS Despatch','Police','Despatch','10111','Despatch, Eastern Cape'),
@@ -252,6 +254,40 @@ def login():
 
 @app.get('/logout')
 def logout(): session.clear(); return redirect(url_for('home'))
+
+@app.route('/admin/security', methods=['GET','POST'])
+@admin_required
+def admin_security():
+    u=current_user()
+    if request.method == 'POST':
+        current_password = request.form.get('current_password','')
+        new_email = request.form.get('email','').strip().lower()
+        new_password = request.form.get('new_password','')
+        confirm_password = request.form.get('confirm_password','')
+        if not check_password_hash(u['password'], current_password):
+            flash('Current admin password is incorrect.','error')
+            return render_template('admin_security.html')
+        if '@' not in new_email or '.' not in new_email.split('@')[-1]:
+            flash('Please enter a valid admin email address.','error')
+            return render_template('admin_security.html')
+        if len(new_password) < 8:
+            flash('New password must be at least 8 characters.','error')
+            return render_template('admin_security.html')
+        if new_password != confirm_password:
+            flash('The new passwords do not match.','error')
+            return render_template('admin_security.html')
+        c=db()
+        try:
+            c.execute('UPDATE users SET email=?, password=? WHERE id=?', (new_email, generate_password_hash(new_password), u['id']))
+            c.commit()
+            flash('Admin login details updated successfully.','success')
+        except sqlite3.IntegrityError:
+            flash('That email address is already in use.','error')
+        finally:
+            c.close()
+        return redirect(url_for('admin_security'))
+    return render_template('admin_security.html')
+
 
 @app.route('/subscribe')
 def subscribe():
