@@ -117,6 +117,7 @@ def init_db():
     for col, sql in {
         'paid_until': 'ALTER TABLE subscriptions ADD COLUMN paid_until TEXT',
         'access_enabled': 'ALTER TABLE subscriptions ADD COLUMN access_enabled INTEGER NOT NULL DEFAULT 0',
+        'manual_override': 'ALTER TABLE subscriptions ADD COLUMN manual_override INTEGER NOT NULL DEFAULT 0',
     }.items():
         if col not in existing_cols:
             c.execute(sql)
@@ -168,7 +169,8 @@ def ensure_subscription(user_id):
 def refresh_membership(user_id):
     s=ensure_subscription(user_id)
     if not s: return None
-    if s['access_enabled'] and s['paid_until']:
+    # Management override is deliberately not auto-expired.
+    if not s['manual_override'] and s['access_enabled'] and s['paid_until']:
         try:
             if datetime.strptime(s['paid_until'],'%Y-%m-%d %H:%M:%S') < datetime.now():
                 upsert_subscription(user_id,status='expired',access_enabled=0)
@@ -181,7 +183,10 @@ def subscription_is_active(u):
     if not u: return False
     if u['role'] == 'admin': return True
     s=refresh_membership(u['id'])
-    if not s or not s['access_enabled'] or s['status'] != 'active' or not s['paid_until']: return False
+    if not s or not s['access_enabled'] or s['status'] != 'active': return False
+    # Explicit management override takes precedence over the payment date.
+    if s['manual_override']: return True
+    if not s['paid_until']: return False
     try: return datetime.strptime(s['paid_until'],'%Y-%m-%d %H:%M:%S') >= datetime.now()
     except ValueError: return False
 
@@ -586,25 +591,16 @@ def admin_user_action(user_id):
     action=request.form.get('action','')
     s=ensure_subscription(user_id)
     if action=='activate':
-        if not s['paid_until']:
-            flash('No paid-through date exists. Record the EFT payment first.','error')
-        else:
-            try:
-                if datetime.strptime(s['paid_until'],'%Y-%m-%d %H:%M:%S') >= datetime.now():
-                    upsert_subscription(user_id,status='active',access_enabled=1)
-                    flash('Access activated.','success')
-                else:
-                    flash('Membership has expired. Record the new EFT payment first.','error')
-            except ValueError:
-                flash('Invalid membership expiry date.','error')
+        upsert_subscription(user_id,status='active',access_enabled=1,manual_override=1)
+        flash('Access ON. Management override is active.','success')
     elif action=='deactivate':
-        upsert_subscription(user_id,status='suspended',access_enabled=0)
-        flash('Access disabled.','success')
+        upsert_subscription(user_id,status='suspended',access_enabled=0,manual_override=0)
+        flash('Access OFF.','success')
     elif action=='paid':
         paid_at=now()
         paid_until=(datetime.now()+timedelta(days=MEMBERSHIP_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
         reference=request.form.get('reference','').strip() or 'EFT'
-        upsert_subscription(user_id,status='active',gateway='eft',amount=SUBSCRIPTION_AMOUNT_CENTS,started_at=s['started_at'] or paid_at,paid_until=paid_until,last_payment_at=paid_at,cancelled_at=None,access_enabled=1)
+        upsert_subscription(user_id,status='active',gateway='eft',amount=SUBSCRIPTION_AMOUNT_CENTS,started_at=s['started_at'] or paid_at,paid_until=paid_until,last_payment_at=paid_at,cancelled_at=None,access_enabled=1,manual_override=0)
         record_payment(user_id,'eft.payment',reference,SUBSCRIPTION_AMOUNT_CENTS,'success',{'method':'EFT','reference':reference,'paid_at':paid_at,'paid_until':paid_until})
         flash('Payment recorded and 30 days added.','success')
     elif action=='extend':
@@ -613,7 +609,7 @@ def admin_user_action(user_id):
             try: base=max(base,datetime.strptime(s['paid_until'],'%Y-%m-%d %H:%M:%S'))
             except ValueError: pass
         paid_until=(base+timedelta(days=MEMBERSHIP_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
-        upsert_subscription(user_id,status='active',gateway='eft',amount=SUBSCRIPTION_AMOUNT_CENTS,paid_until=paid_until,last_payment_at=now(),access_enabled=1)
+        upsert_subscription(user_id,status='active',gateway='eft',amount=SUBSCRIPTION_AMOUNT_CENTS,paid_until=paid_until,last_payment_at=now(),access_enabled=1,manual_override=0)
         record_payment(user_id,'eft.manual_extension','MANUAL',SUBSCRIPTION_AMOUNT_CENTS,'success',{'method':'Manual extension','paid_until':paid_until})
         flash('30 days added to the membership.','success')
     return redirect(url_for('admin_users',q=request.form.get('q','').strip()))
@@ -625,26 +621,22 @@ def admin_subscription(user_id):
     if action=='paid':
         paid_at=now(); paid_until=(datetime.now()+timedelta(days=MEMBERSHIP_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
         reference=request.form.get('reference','').strip() or 'EFT'
-        upsert_subscription(user_id,status='active',gateway='eft',amount=SUBSCRIPTION_AMOUNT_CENTS,started_at=s['started_at'] or paid_at,paid_until=paid_until,last_payment_at=paid_at,cancelled_at=None,access_enabled=1)
+        upsert_subscription(user_id,status='active',gateway='eft',amount=SUBSCRIPTION_AMOUNT_CENTS,started_at=s['started_at'] or paid_at,paid_until=paid_until,last_payment_at=paid_at,cancelled_at=None,access_enabled=1,manual_override=0)
         record_payment(user_id,'eft.payment',reference,SUBSCRIPTION_AMOUNT_CENTS,'success',{'method':'EFT','reference':reference,'paid_at':paid_at,'paid_until':paid_until})
         flash('EFT recorded. Membership is active for 30 days.','success')
     elif action=='access_on':
-        if s['paid_until']:
-            try:
-                if datetime.strptime(s['paid_until'],'%Y-%m-%d %H:%M:%S') >= datetime.now():
-                    upsert_subscription(user_id,status='active',access_enabled=1); flash('Access enabled.','success')
-                else: flash('Membership expired. Record the new EFT payment first.','error')
-            except ValueError: flash('Invalid membership expiry date.','error')
-        else: flash('Record a payment first.','error')
+        upsert_subscription(user_id,status='active',access_enabled=1,manual_override=1)
+        flash('Access ON. Management override is active.','success')
     elif action=='access_off':
-        upsert_subscription(user_id,status='suspended',access_enabled=0); flash('Access disabled.','success')
+        upsert_subscription(user_id,status='suspended',access_enabled=0,manual_override=0)
+        flash('Access OFF.','success')
     elif action=='extend':
         base=datetime.now()
         if s['paid_until']:
             try: base=max(base,datetime.strptime(s['paid_until'],'%Y-%m-%d %H:%M:%S'))
             except ValueError: pass
         paid_until=(base+timedelta(days=MEMBERSHIP_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
-        upsert_subscription(user_id,status='active',gateway='eft',amount=SUBSCRIPTION_AMOUNT_CENTS,paid_until=paid_until,last_payment_at=now(),access_enabled=1)
+        upsert_subscription(user_id,status='active',gateway='eft',amount=SUBSCRIPTION_AMOUNT_CENTS,paid_until=paid_until,last_payment_at=now(),access_enabled=1,manual_override=0)
         record_payment(user_id,'eft.manual_extension','MANUAL',SUBSCRIPTION_AMOUNT_CENTS,'success',{'method':'Manual extension','paid_until':paid_until})
         flash('30 days added to the membership.','success')
     return redirect(url_for('admin'))

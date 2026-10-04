@@ -25,7 +25,7 @@
       <h2>{{u['name']}}</h2>
       <p><strong>Email:</strong> {{u['email']}}</p>
       <p><strong>Joined:</strong> {{u['created_at']}}</p>
-      <p><strong>Paid until:</strong> {{s['paid_until'] or 'No payment recorded'}}</p>
+      <p><strong>Paid until:</strong> {{s['paid_until'] or 'No payment recorded'}}{% if s['manual_override'] %} · <strong>Management override: ON</strong>{% endif %}</p>
       <p><strong>Last EFT:</strong> {{s['last_payment_at'] or 'Never'}}</p>
 
       <div class="moderate">
@@ -34,8 +34,8 @@
           <input type="hidden" name="q" value="{{q}}">
           <input name="reference" placeholder="EFT reference / proof ID" style="max-width:240px">
           <button class="verify" name="action" value="paid">✓ EFT Paid — 30 Days</button>
-          <button class="verify" name="action" value="activate">Access ON</button>
-          <button class="reject" name="action" value="deactivate">Access OFF</button>
+          <button class="verify" name="action" value="activate">🔓 Access ON (Management Override)</button>
+          <button class="reject" name="action" value="deactivate">🔒 Access OFF</button>
           <button class="secondary" name="action" value="extend">+30 Days</button>
         </form>
       </div>
