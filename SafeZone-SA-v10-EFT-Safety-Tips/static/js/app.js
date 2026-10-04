@@ -7,7 +7,7 @@ async function getLocation(){
 async function checkIn(){
   const loc=await getLocation();
   const r=await fetch('/api/checkin',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.SAFEZONE_CSRF||''},body:JSON.stringify(loc)});
-  const d=await r.json(); alert((d.ok?'🟢 ':'⚠️ ')+d.message);
+  const d=await r.json(); alert((d.ok?'🟢 ':'⚠️ ')+d.message+(d.checked_at?'\n\nLast updated: '+d.checked_at:''));
 }
 async function activateEmergency(){
   const status=document.getElementById('emergency-status');

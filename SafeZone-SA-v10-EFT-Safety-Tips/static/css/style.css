@@ -5,3 +5,4 @@
 
 .payment-card{margin:18px 0;padding:20px;border:1px solid rgba(255,255,255,.12);border-radius:18px;background:rgba(255,255,255,.05);box-shadow:0 10px 30px rgba(0,0,0,.12)}
 .payment-card h2{margin-top:0}.payment-row{display:flex;justify-content:space-between;gap:16px;padding:11px 0;border-bottom:1px solid rgba(255,255,255,.08)}.payment-row:last-of-type{border-bottom:0}.payment-row span{opacity:.72}.payment-row strong{text-align:right;word-break:break-word}.payment-amount{margin-top:16px;font-size:30px;font-weight:800}.payment-amount small{font-size:14px;font-weight:500;opacity:.7}
+.button-row{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}.circle-member{gap:6px}.circle-member .badge{display:inline-block;width:max-content}

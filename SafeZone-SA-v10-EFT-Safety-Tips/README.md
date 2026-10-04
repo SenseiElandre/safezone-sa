@@ -1,11 +1,5 @@
-# SafeZone SA v13
-South African safety PWA with EFT membership, safety tips, admin user management, admin credential updates, and a more reliable browser location map.
+# SafeZone SA v14 — Trusted Circle + Live Location Fix
 
-## Admin security
-Use Admin Centre -> Change admin login details to update the admin name, email and password. The current password is required.
+v14 adds mutual SafeZone Trusted Circle links, latest “I'm Safe” status with last-updated time, circle refresh/polling, and improved browser live-location tracking using watchPosition with accuracy display and Android permission guidance.
 
-## Membership
-R99 EFT gives 30 days of access. Admin records payment and access automatically expires after the paid period.
-
-## Map
-The map uses Leaflet/OpenStreetMap and browser geolocation. The user must allow location permission in the browser.
+Upload this source to the existing GitHub repository and deploy the latest commit in Render.

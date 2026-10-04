@@ -1,1 +1,51 @@
-{% extends 'base.html' %}{% block content %}<section class="section"><div class="section-head"><div><div class="eyebrow">YOUR PEOPLE</div><h1>Trusted Circle</h1></div></div><p>Add people you trust. SafeZone stores these contacts for your emergency plan.</p><form class="form" method="post"><input type="hidden" name="_csrf" value="{{csrf_token}}"><input name="name" placeholder="Contact name" required><input name="phone" type="tel" placeholder="Phone number" required><input name="relation" placeholder="Relationship e.g. Wife, Mom, Friend"><button class="primary">+ Add trusted contact</button></form>{% for c in contacts %}<article class="contact"><strong>{{c['name']}}</strong><span>{{c['relation'] or 'Trusted contact'}}</span><a href="tel:{{c['phone']}}">📞 {{c['phone']}}</a><form method="post" action="{{url_for('delete_contact',cid=c['id'])}}"><input type="hidden" name="_csrf" value="{{csrf_token}}"><button class="link-danger">Remove</button></form></article>{% else %}<div class="empty">You haven't added anyone yet.</div>{% endfor %}</section>{% endblock %}
+{% extends 'base.html' %}{% block content %}
+<section class="section">
+  <div class="section-head"><div><div class="eyebrow">YOUR PEOPLE</div><h1>Trusted Circle</h1></div></div>
+  <p>Add people you trust. If they also have a SafeZone account, add the email they use to log in. SafeZone will link you into a <strong>mutual safety circle</strong> so you can see each other's latest “I'm Safe” check-in.</p>
+
+  <div class="profile-card"><b>🟢 Your latest check-in</b>
+    <span id="own-checkin">{% if own_checkin %}Last updated: {{own_checkin['created_at']}}{% else %}You have not checked in yet.{% endif %}</span>
+  </div>
+
+  <h2>Circle safety</h2>
+  <p class="muted">A member's latest check-in is shown here. No live location is shared automatically; location is only stored with a check-in when the member's device provides it.</p>
+  <div id="circle-status-list">
+    {% for m in links %}
+    <article class="contact circle-member">
+      <strong>🟢 {{m['name']}}</strong><span>📍 {{m['area']}}</span>
+      <span>{% if m['last_checkin'] %}Last “I'm Safe”: <b>{{m['last_checkin']}}</b>{% else %}⚠️ No “I'm Safe” check-in yet{% endif %}</span>
+      {% if m['latitude'] is not none and m['longitude'] is not none %}<a target="_blank" rel="noopener" href="https://www.google.com/maps?q={{m['latitude']}},{{m['longitude']}}">📍 Open last check-in location</a>{% endif %}
+    </article>
+    {% else %}<div class="empty">No linked SafeZone members yet. Add a trusted person's SafeZone login email below to connect your circle.</div>{% endfor %}
+  </div>
+  <button class="secondary" type="button" onclick="refreshCircle()">🔄 Refresh circle status</button>
+
+  <h2>Add trusted person</h2>
+  <form class="form" method="post"><input type="hidden" name="_csrf" value="{{csrf_token}}">
+    <input name="name" placeholder="Contact name" required>
+    <input name="email" type="email" placeholder="SafeZone email (optional — enables mutual check-ins)">
+    <input name="phone" type="tel" placeholder="Phone number" required>
+    <input name="relation" placeholder="Relationship e.g. Wife, Mom, Friend">
+    <button class="primary">+ Add trusted contact</button>
+  </form>
+
+  <h2>Your contacts</h2>
+  {% for c in contacts %}
+  <article class="contact"><strong>{{c['name']}}</strong><span>{{c['relation'] or 'Trusted contact'}}</span>{% if c['email'] %}<span>✉️ {{c['email']}}</span>{% endif %}<a href="tel:{{c['phone']}}">📞 {{c['phone']}}</a>{% if c['linked_user_id'] %}<span class="badge">🟢 SafeZone member — mutual check-ins enabled</span>{% endif %}<form method="post" action="{{url_for('delete_contact',cid=c['id'])}}"><input type="hidden" name="_csrf" value="{{csrf_token}}"><button class="link-danger">Remove</button></form></article>
+  {% else %}<div class="empty">You haven't added anyone yet.</div>{% endfor %}
+</section>
+<script>
+async function refreshCircle(){
+  const box=document.getElementById('circle-status-list');
+  try{
+    const r=await fetch('/api/circle-status'); const d=await r.json();
+    if(!d.ok) throw new Error('Unable to refresh');
+    document.getElementById('own-checkin').textContent=d.checked_in.last_checkin ? 'Last updated: '+d.checked_in.last_checkin : 'You have not checked in yet.';
+    if(!d.members.length){box.innerHTML='<div class="empty">No linked SafeZone members yet.</div>';return;}
+    box.innerHTML=d.members.map(m=>`<article class="contact circle-member"><strong>🟢 ${escapeHtml(m.name)}</strong><span>📍 ${escapeHtml(m.area||'')}</span><span>${m.last_checkin?'Last “I\'m Safe”: <b>'+escapeHtml(m.last_checkin)+'</b>':'⚠️ No “I\'m Safe” check-in yet'}</span>${m.latitude!=null&&m.longitude!=null?`<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(m.latitude+','+m.longitude)}">📍 Open last check-in location</a>`:''}</article>`).join('');
+  }catch(e){alert('Could not refresh the Trusted Circle right now.');}
+}
+function escapeHtml(v){return String(v??'').replace(/[&<>'"]/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[s]));}
+setInterval(refreshCircle,30000);
+</script>
+{% endblock %}

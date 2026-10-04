@@ -114,6 +114,23 @@ def init_db():
     }.items():
         if col not in existing_cols:
             c.execute(sql)
+    # v14: link trusted-circle members who also have SafeZone accounts.
+    contact_cols = {r['name'] for r in c.execute('PRAGMA table_info(contacts)').fetchall()}
+    for col, sql in {
+        'email': 'ALTER TABLE contacts ADD COLUMN email TEXT',
+        'linked_user_id': 'ALTER TABLE contacts ADD COLUMN linked_user_id INTEGER',
+    }.items():
+        if col not in contact_cols:
+            c.execute(sql)
+    c.execute('''CREATE TABLE IF NOT EXISTS trusted_links (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        trusted_user_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(user_id, trusted_user_id),
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY(trusted_user_id) REFERENCES users(id) ON DELETE CASCADE
+    )''')
     c.execute("UPDATE subscriptions SET gateway='eft' WHERE gateway IS NULL OR gateway!='eft'")
     if c.execute('SELECT COUNT(*) n FROM users').fetchone()['n'] == 0:
         admin_email = os.environ.get('ADMIN_EMAIL', 'admin@safezone.local').strip().lower()
@@ -314,15 +331,46 @@ def get_payment_history(user_id, limit=10):
 def contacts():
     u=current_user(); c=db()
     if request.method=='POST':
-        name=request.form.get('name','').strip(); phone=request.form.get('phone','').strip(); relation=request.form.get('relation','').strip()
-        if name and phone: c.execute('INSERT INTO contacts(user_id,name,phone,relation,created_at) VALUES(?,?,?,?,?)',(u['id'],name,phone,relation,now())); c.commit(); flash('Trusted contact added.','success')
-        return redirect(url_for('contacts'))
-    rows=c.execute('SELECT * FROM contacts WHERE user_id=? ORDER BY id DESC',(u['id'],)).fetchall(); c.close(); return render_template('contacts.html',contacts=rows)
+        name=request.form.get('name','').strip(); phone=request.form.get('phone','').strip(); relation=request.form.get('relation','').strip(); email=request.form.get('email','').strip().lower()
+        if not name or not phone:
+            flash('Please enter the contact name and phone number.','error')
+            c.close(); return redirect(url_for('contacts'))
+        linked_user=None
+        if email:
+            linked_user=c.execute('SELECT id,name,email FROM users WHERE lower(email)=lower(?) AND role!='admin'',(email,)).fetchone()
+            if linked_user and linked_user['id']==u['id']:
+                linked_user=None
+                flash('You cannot add yourself to your own Trusted Circle.','error')
+                c.close(); return redirect(url_for('contacts'))
+        cur=c.execute('INSERT INTO contacts(user_id,name,phone,relation,email,linked_user_id,created_at) VALUES(?,?,?,?,?,?,?)',
+                      (u['id'],name,phone,relation,email,linked_user['id'] if linked_user else None,now()))
+        if linked_user:
+            # Mutual safety link: both members can see each other's latest Safe check-in.
+            c.execute('INSERT OR IGNORE INTO trusted_links(user_id,trusted_user_id,created_at) VALUES(?,?,?)',(u['id'],linked_user['id'],now()))
+            c.execute('INSERT OR IGNORE INTO trusted_links(user_id,trusted_user_id,created_at) VALUES(?,?,?)',(linked_user['id'],u['id'],now()))
+            flash(f'{linked_user["name"]} is a SafeZone member. Mutual safety check-ins are now linked.','success')
+        else:
+            flash('Trusted contact added. Add their SafeZone account email if you want mutual safety check-ins.','success')
+        c.commit(); c.close(); return redirect(url_for('contacts'))
+    rows=c.execute('SELECT * FROM contacts WHERE user_id=? ORDER BY id DESC',(u['id'],)).fetchall()
+    links=c.execute('''SELECT u.id,u.name,u.email,u.area,
+                              (SELECT created_at FROM checkins ch WHERE ch.user_id=u.id ORDER BY ch.id DESC LIMIT 1) AS last_checkin,
+                              (SELECT latitude FROM checkins ch WHERE ch.user_id=u.id ORDER BY ch.id DESC LIMIT 1) AS latitude,
+                              (SELECT longitude FROM checkins ch WHERE ch.user_id=u.id ORDER BY ch.id DESC LIMIT 1) AS longitude
+                       FROM trusted_links tl JOIN users u ON u.id=tl.trusted_user_id
+                       WHERE tl.user_id=? ORDER BY u.name COLLATE NOCASE''',(u['id'],)).fetchall()
+    own=c.execute('SELECT created_at,latitude,longitude FROM checkins WHERE user_id=? ORDER BY id DESC LIMIT 1',(u['id'],)).fetchone()
+    c.close(); return render_template('contacts.html',contacts=rows,links=links,own_checkin=own)
 
 @app.post('/contacts/<int:cid>/delete')
 @subscription_required
 def delete_contact(cid):
-    c=db(); c.execute('DELETE FROM contacts WHERE id=? AND user_id=?',(cid,current_user()['id'])); c.commit(); c.close(); return redirect(url_for('contacts'))
+    u=current_user(); c=db(); row=c.execute('SELECT linked_user_id FROM contacts WHERE id=? AND user_id=?',(cid,u['id'])).fetchone()
+    c.execute('DELETE FROM contacts WHERE id=? AND user_id=?',(cid,u['id']))
+    if row and row['linked_user_id']:
+        c.execute('DELETE FROM trusted_links WHERE user_id=? AND trusted_user_id=?',(u['id'],row['linked_user_id']))
+        c.execute('DELETE FROM trusted_links WHERE user_id=? AND trusted_user_id=?',(row['linked_user_id'],u['id']))
+    c.commit(); c.close(); return redirect(url_for('contacts'))
 
 @app.route('/emergency')
 def emergency():
@@ -352,7 +400,22 @@ def emergency_resolve():
 @app.post('/api/checkin')
 @subscription_required
 def checkin():
-    u=current_user(); data=request.get_json(silent=True) or {}; c=db(); c.execute('INSERT INTO checkins(user_id,area,latitude,longitude,created_at) VALUES(?,?,?,?,?)',(u['id'],data.get('area') or u['area'],data.get('latitude'),data.get('longitude'),now())); c.commit(); c.close(); return jsonify(ok=True,message='Check-in recorded. You are marked safe.')
+    u=current_user(); data=request.get_json(silent=True) or {}; checked_at=now(); c=db(); c.execute('INSERT INTO checkins(user_id,area,latitude,longitude,created_at) VALUES(?,?,?,?,?)',(u['id'],data.get('area') or u['area'],data.get('latitude'),data.get('longitude'),checked_at)); c.commit(); c.close(); return jsonify(ok=True,message='Check-in recorded. Your Trusted Circle can now see that you are safe.',checked_at=checked_at)
+
+@app.get('/api/circle-status')
+@subscription_required
+def circle_status():
+    u=current_user(); c=db()
+    rows=c.execute('''SELECT u.id,u.name,u.email,u.area,
+                             (SELECT ch.created_at FROM checkins ch WHERE ch.user_id=u.id ORDER BY ch.id DESC LIMIT 1) AS last_checkin,
+                             (SELECT ch.latitude FROM checkins ch WHERE ch.user_id=u.id ORDER BY ch.id DESC LIMIT 1) AS latitude,
+                             (SELECT ch.longitude FROM checkins ch WHERE ch.user_id=u.id ORDER BY ch.id DESC LIMIT 1) AS longitude
+                      FROM trusted_links tl JOIN users u ON u.id=tl.trusted_user_id
+                      WHERE tl.user_id=? ORDER BY u.name COLLATE NOCASE''',(u['id'],)).fetchall()
+    own=c.execute('SELECT created_at,latitude,longitude FROM checkins WHERE user_id=? ORDER BY id DESC LIMIT 1',(u['id'],)).fetchone(); c.close()
+    def item(r):
+        return {'id':r['id'],'name':r['name'],'email':r['email'],'area':r['area'],'last_checkin':r['last_checkin'],'latitude':r['latitude'],'longitude':r['longitude']}
+    return jsonify(ok=True,checked_in={'last_checkin':own['created_at'] if own else None,'latitude':own['latitude'] if own else None,'longitude':own['longitude'] if own else None},members=[item(r) for r in rows])
 
 @app.route('/alerts')
 @subscription_required
