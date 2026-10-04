@@ -17,3 +17,5 @@
 .overdue-journey{border:2px solid #ef9d9d;background:#fff5f5}
 .journey-overdue,.journey-badge-overdue{color:#a52323;font-weight:900}
 .journey-card .button-row{margin-bottom:0}
+
+.contact-choice{display:flex;align-items:center;gap:10px;padding:14px 0;border-top:1px solid rgba(8,17,31,.10);cursor:pointer}.contact-choice input{width:22px;height:22px}.contact-choice .badge{margin-left:auto}.contact-choice .muted{margin-left:auto}.profile-card button{margin-top:12px}.emergency-page .profile-card{margin:16px 0}.emergency-page .notice{margin-top:14px}

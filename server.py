@@ -6,7 +6,13 @@ import os, json, secrets, time
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import SimpleConnectionPool
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
+
+try:
+    from pywebpush import webpush, WebPushException
+except Exception:
+    webpush = None
+    WebPushException = Exception
 
 BASE = os.path.dirname(__file__)
 DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
@@ -135,6 +141,11 @@ def init_db():
       created_at TEXT NOT NULL, UNIQUE(user_id, trusted_user_id),
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY(trusted_user_id) REFERENCES users(id) ON DELETE CASCADE
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, endpoint TEXT UNIQUE NOT NULL,
+      p256dh TEXT NOT NULL, auth TEXT NOT NULL, created_at TEXT NOT NULL,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )""")
     c.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS paid_until TEXT")
     c.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS access_enabled INTEGER NOT NULL DEFAULT 0")
@@ -348,6 +359,72 @@ def subscription_page():
 def get_payment_history(user_id, limit=10):
     c=db(); rows=c.execute('SELECT * FROM payment_events WHERE user_id=? ORDER BY id DESC LIMIT ?', (user_id,limit)).fetchall(); c.close(); return rows
 
+@app.get('/api/push/public-key')
+@login_required
+def push_public_key():
+    key=os.environ.get('VAPID_PUBLIC_KEY','').strip()
+    if not key:
+        return jsonify(ok=False,message='Emergency push alerts are not configured yet.'),503
+    return jsonify(ok=True,public_key=key)
+
+@app.post('/api/push/subscribe')
+@login_required
+def push_subscribe():
+    data=request.get_json(silent=True) or {}; sub=data.get('subscription') or {}
+    endpoint=(sub.get('endpoint') or '').strip(); keys=sub.get('keys') or {}
+    p256dh=(keys.get('p256dh') or '').strip(); auth=(keys.get('auth') or '').strip()
+    if not endpoint or not p256dh or not auth:
+        return jsonify(ok=False,message='Invalid push subscription.'),400
+    c=db()
+    c.execute("""INSERT INTO push_subscriptions(user_id,endpoint,p256dh,auth,created_at) VALUES(?,?,?,?,?)
+                 ON CONFLICT(endpoint) DO UPDATE SET user_id=EXCLUDED.user_id,p256dh=EXCLUDED.p256dh,auth=EXCLUDED.auth""",
+              (current_user()['id'],endpoint,p256dh,auth,now()))
+    c.commit(); c.close()
+    return jsonify(ok=True,message='Emergency alarm enabled on this device.')
+
+def _vapid_private_file():
+    private=os.environ.get('VAPID_PRIVATE_KEY','').strip()
+    if not private:
+        return None
+    if 'BEGIN' in private:
+        path='/tmp/safezone-vapid-private.pem'
+        with open(path,'w') as f: f.write(private)
+        return path
+    try:
+        import base64
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        raw=base64.urlsafe_b64decode(private + '='*((4-len(private)%4)%4))
+        key=ec.derive_private_key(int.from_bytes(raw,'big'),ec.SECP256R1())
+        pem=key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.PKCS8,serialization.NoEncryption())
+        path='/tmp/safezone-vapid-private.pem'
+        with open(path,'wb') as f: f.write(pem)
+        return path
+    except Exception:
+        return None
+
+def send_push_to_user(user_id, payload):
+    public=os.environ.get('VAPID_PUBLIC_KEY','').strip(); private_file=_vapid_private_file()
+    if not public or not private_file or webpush is None:
+        return 0
+    c=db(); rows=c.execute('SELECT id,endpoint,p256dh,auth FROM push_subscriptions WHERE user_id=?',(user_id,)).fetchall(); c.close()
+    sent=0; stale=[]
+    claims={'sub':os.environ.get('VAPID_SUBJECT','mailto:admin@safezone-sa.app')}
+    for r in rows:
+        sub={'endpoint':r['endpoint'],'keys':{'p256dh':r['p256dh'],'auth':r['auth']}}
+        try:
+            webpush(subscription_info=sub,data=json.dumps(payload),vapid_private_key=private_file,vapid_claims=claims,ttl=120)
+            sent += 1
+        except Exception as exc:
+            msg=str(exc)
+            if '404' in msg or '410' in msg:
+                stale.append(r['id'])
+    if stale:
+        c=db()
+        for sid in stale: c.execute('DELETE FROM push_subscriptions WHERE id=?',(sid,))
+        c.commit(); c.close()
+    return sent
+
 @app.route('/contacts',methods=['GET','POST'])
 @subscription_required
 def contacts():
@@ -406,13 +483,29 @@ def emergency_start():
     u=current_user()
     if not u: return jsonify(ok=False,message='Please log in first.'),401
     if rate_limited(f'emergency:{u["id"]}',3,300): return jsonify(ok=False,message='Please wait before starting another emergency event.'),429
-    data=request.get_json(silent=True) or {}; lat=data.get('latitude'); lon=data.get('longitude'); c=db(); cur=c.execute('INSERT INTO emergency_events(user_id,latitude,longitude,created_at) VALUES(?,?,?,?) RETURNING id',(u['id'],lat,lon,now())); event_id=cur.fetchone()['id']; contacts=c.execute('SELECT name,phone,relation FROM contacts WHERE user_id=? ORDER BY id',(u['id'],)).fetchall(); c.commit(); c.close()
+    data=request.get_json(silent=True) or {}; lat=data.get('latitude'); lon=data.get('longitude')
+    selected=[]
+    for raw in (data.get('circle_member_ids') or []):
+        try: selected.append(int(raw))
+        except (TypeError,ValueError): pass
+    c=db()
+    cur=c.execute('INSERT INTO emergency_events(user_id,latitude,longitude,created_at) VALUES(?,?,?,?) RETURNING id',(u['id'],lat,lon,now()))
+    event_id=cur.fetchone()['id']
+    contacts=c.execute('SELECT * FROM contacts WHERE user_id=? ORDER BY id',(u['id'],)).fetchall()
+    linked_targets=[]
+    if selected:
+        linked_targets=c.execute("""SELECT DISTINCT u.id,u.name FROM contacts ct JOIN users u ON u.id=ct.linked_user_id
+                                    WHERE ct.user_id=? AND ct.linked_user_id IS NOT NULL AND ct.linked_user_id = ANY(%s)""",(selected,)).fetchall()
+    c.commit(); c.close()
     location=f'https://www.google.com/maps?q={lat},{lon}' if lat is not None and lon is not None else ''
     message=f'SAFEZONE SA EMERGENCY: {u["name"]} may need help. Location: {location}' if location else f'SAFEZONE SA EMERGENCY: {u["name"]} may need help. Please contact them immediately.'
     notified=[]
     for x in contacts:
-        phone=''.join(ch for ch in x['phone'] if ch.isdigit() or ch=='+'); sms=f'sms:{phone}?body='+quote(message); wa='https://wa.me/'+''.join(ch for ch in phone if ch.isdigit())+'?text='+quote(message); notified.append({'name':x['name'],'phone':x['phone'],'sms':sms,'whatsapp':wa})
-    return jsonify(ok=True,event_id=event_id,message='Emergency mode activated.',numbers=EMERGENCY,contacts=notified,location=location)
+        phone=''.join(ch for ch in x['phone'] if ch.isdigit() or ch=='+'); sms=f'sms:{phone}?body='+quote(message); wa='https://wa.me/'+''.join(ch for ch in phone if ch.isdigit())+'?text='+quote(message); notified.append({'name':x['name'],'phone':x['phone'],'sms':sms,'whatsapp':wa,'linked_user_id':x['linked_user_id']})
+    push_count=0
+    for target in linked_targets:
+        push_count += send_push_to_user(target['id'], {'type':'emergency','event_id':event_id,'title':'🚨 SAFEZONE EMERGENCY','body':f'{u["name"]} activated an emergency. Check on them immediately.','url':'/emergency'})
+    return jsonify(ok=True,event_id=event_id,message='Emergency mode activated.',numbers=EMERGENCY,contacts=notified,location=location,push_count=push_count)
 
 @app.post('/api/emergency/resolve')
 @login_required
@@ -440,7 +533,7 @@ def circle_status():
     return jsonify(ok=True,checked_in={'last_checkin':own['created_at'] if own else None,'latitude':own['latitude'] if own else None,'longitude':own['longitude'] if own else None},members=[item(r) for r in rows])
 
 @app.route('/checkin')
-@subscription_required
+@login_required
 def checkin_page():
     u=current_user()
     c=db()
@@ -451,7 +544,7 @@ def checkin_page():
     return render_template('checkin.html', active=active)
 
 @app.post('/api/journey/start')
-@subscription_required
+@login_required
 def journey_start():
     u=current_user()
     data=request.get_json(silent=True) or {}
@@ -463,18 +556,22 @@ def journey_start():
     if minutes not in {15,30,45,60,90,120,180}:
         return jsonify(ok=False,message='Please choose a valid check-in time.'),400
     c=db()
-    existing=c.execute("SELECT id FROM safety_journeys WHERE user_id=? AND status='active' LIMIT 1",(u['id'],)).fetchone()
-    if existing:
-        c.close(); return jsonify(ok=False,message='You already have an active journey.'),400
-    started=datetime.now(); expected=started+timedelta(minutes=minutes)
-    c.execute("""INSERT INTO safety_journeys(user_id,destination,expected_at,started_at,status)
-                 VALUES(?,?,?,?,?)""",(u['id'],destination,expected.strftime('%Y-%m-%d %H:%M:%S'),
-                 started.strftime('%Y-%m-%d %H:%M:%S'),'active'))
-    c.commit(); c.close()
-    return jsonify(ok=True,expected_at=expected.strftime('%Y-%m-%d %H:%M:%S'))
+    try:
+        existing=c.execute("SELECT id FROM safety_journeys WHERE user_id=? AND status='active' LIMIT 1",(u['id'],)).fetchone()
+        if existing:
+            c.close(); return jsonify(ok=False,message='You already have an active journey.'),400
+        started=datetime.now(); expected=started+timedelta(minutes=minutes)
+        c.execute("""INSERT INTO safety_journeys(user_id,destination,expected_at,started_at,status)
+                     VALUES(?,?,?,?,?)""",(u['id'],destination,expected.strftime('%Y-%m-%d %H:%M:%S'),
+                     started.strftime('%Y-%m-%d %H:%M:%S'),'active'))
+        c.commit(); c.close()
+        return jsonify(ok=True,expected_at=expected.strftime('%Y-%m-%d %H:%M:%S'))
+    except Exception:
+        c.rollback(); c.close()
+        return jsonify(ok=False,message='SafeZone could not start the journey right now. Please try again.'),500
 
 @app.post('/api/journey/complete')
-@subscription_required
+@login_required
 def journey_complete():
     u=current_user(); c=db()
     c.execute("""UPDATE safety_journeys SET status='completed', completed_at=?
@@ -483,7 +580,7 @@ def journey_complete():
     return jsonify(ok=True,message="You're marked as safely arrived.")
 
 @app.get('/api/circle-journeys')
-@subscription_required
+@login_required
 def circle_journeys():
     u=current_user(); c=db()
     rows=c.execute("""SELECT u.id,u.name,sj.destination,sj.started_at,sj.expected_at,

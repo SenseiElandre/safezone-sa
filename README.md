@@ -37,3 +37,12 @@ The app does **not** delete users on logout. Accounts are stored in PostgreSQL a
 ## Local development
 
 Production requires `DATABASE_URL`. A PostgreSQL database should be used when testing persistence locally as well.
+
+
+## v30 Emergency Push Alarms
+Set these Render environment variables for app-to-app emergency alarms:
+- `VAPID_PUBLIC_KEY` — Web Push public key
+- `VAPID_PRIVATE_KEY` — matching Web Push private key (keep secret)
+- `VAPID_SUBJECT` — optional contact URI, e.g. `mailto:admin@safezone-sa.app`
+
+Each Trusted Circle member must log in on their phone and tap **Enable Emergency Alarm**. The person activating an emergency can then select which linked SafeZone members receive the alarm. The browser/device controls notification sound and vibration; SafeZone requests a high-priority, persistent notification with vibration.
