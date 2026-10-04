@@ -1,4 +1,4 @@
-// SafeZone v30: persistent PWA service worker + emergency push alarms.
+// SafeZone v31: persistent PWA service worker + emergency push alarms.
 async function getLocation(){
   return new Promise(resolve=>{
     if(!navigator.geolocation) return resolve({});
@@ -62,4 +62,4 @@ async function resolveEmergency(){
   await fetch('/api/emergency/resolve',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.SAFEZONE_CSRF||''},body:JSON.stringify({event_id:id})});
   sessionStorage.removeItem('safezone_event'); location.reload();
 }
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/static/sw.js?v=30',{updateViaCache:'none'}).catch(()=>{});}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/static/sw.js?v=31',{updateViaCache:'none'}).catch(()=>{});}

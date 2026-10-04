@@ -5,7 +5,7 @@
 <div id="journey-box">
 {% if active %}
 <article class="journey-card active-journey"><span class="badge">🟠 JOURNEY ACTIVE</span>
-<h2>Going to {{active['destination']}}</h2><p>Expected arrival: <b>{{active['expected_at']}}</b></p>
+<h2>Going to {{active['destination']}}</h2><p>Expected arrival: <b id="expected-arrival">{{active['expected_at']}}</b></p>
 <p id="journey-countdown" class="journey-countdown">Checking time…</p>
 <button class="primary" type="button" onclick="completeJourney()">🟢 I'M HERE — I'VE ARRIVED</button></article>
 {% else %}
@@ -20,12 +20,12 @@
 <script>
 function parseLocal(s){return new Date(s.replace(' ','T'))}
 {% if active %}
-(function(){const target=parseLocal({{active['expected_at']|tojson}}),el=document.getElementById('journey-countdown');
+(function(){const rawExpected={{active['expected_at']|tojson}}; const target=parseLocal(rawExpected+'Z'),el=document.getElementById('journey-countdown'),arrival=document.getElementById('expected-arrival'); if(arrival) arrival.textContent=target.toLocaleString([], {year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
 function tick(){const ms=target-new Date();if(ms<=0){el.innerHTML='<span class="journey-overdue">⚠️ OVERDUE — expected arrival time has passed.</span>';return}
 const total=Math.floor(ms/1000),h=Math.floor(total/3600),m=Math.floor((total%3600)/60),sec=total%60;
 el.textContent='Time remaining: '+(h?String(h).padStart(2,'0')+':':'')+String(m).padStart(2,'0')+':'+String(sec).padStart(2,'0')}
 tick();setInterval(tick,1000)})()
 {% endif %}
 async function startJourney(e){e.preventDefault();const button=e.submitter||e.target.querySelector('button');if(button)button.disabled=true;try{const r=await fetch('/api/journey/start',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.SAFEZONE_CSRF||''},body:JSON.stringify({destination:document.getElementById('destination').value.trim(),minutes:Number(document.getElementById('minutes').value)})});let d;try{d=await r.json()}catch(err){d={ok:false,message:'SafeZone returned an unexpected response. Please refresh and try again.'}}if(!d.ok){alert('⚠️ '+(d.message||'Could not start the journey.'));return}alert('🟠 Journey check-in started. Your Trusted Circle can see it now.');location.reload()}catch(err){alert('⚠️ SafeZone could not start the journey. Please check your connection and try again.')}finally{if(button)button.disabled=false}}
-async function completeJourney(){const r=await fetch('/api/journey/complete',{method:'POST',headers:{'Content-Type':'application/json'}});const d=await r.json();alert(d.message||"You're marked as safely arrived.");location.reload()}
+async function completeJourney(){const button=event && event.currentTarget; if(button)button.disabled=true; try{const r=await fetch('/api/journey/complete',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.SAFEZONE_CSRF||''},body:JSON.stringify({})}); let d; try{d=await r.json()}catch(e){d={ok:false,message:'SafeZone returned an unexpected response. Please try again.'}} if(!r.ok||!d.ok){alert('⚠️ '+(d.message||'Could not mark you as arrived.'));return} alert('🟢 '+(d.message||"You're marked as safely arrived.")); location.reload()}catch(e){alert('⚠️ Could not mark the journey as completed. Please check your connection and try again.')}finally{if(button)button.disabled=false}}
 </script>{% endblock %}

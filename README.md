@@ -46,3 +46,8 @@ Set these Render environment variables for app-to-app emergency alarms:
 - `VAPID_SUBJECT` — optional contact URI, e.g. `mailto:admin@safezone-sa.app`
 
 Each Trusted Circle member must log in on their phone and tap **Enable Emergency Alarm**. The person activating an emergency can then select which linked SafeZone members receive the alarm. The browser/device controls notification sound and vibration; SafeZone requests a high-priority, persistent notification with vibration.
+
+
+## v31 fixes
+- Journey arrival button now sends the CSRF token required by the production security middleware.
+- Journey arrival time is displayed in the user device local time while stored consistently on the server.
