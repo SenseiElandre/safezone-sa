@@ -1,0 +1,80 @@
+{% extends 'base.html' %}{% block content %}
+<section class="section map-page">
+  <div class="eyebrow">SAFETY MAP</div><h1>Help around you</h1><p class="muted">Find verified safety resources and optionally show your current position. Your location is only requested when you choose to use it.</p>
+  <div id="safety-map" class="safety-map"></div>
+  <div class="button-row"><button class="primary" onclick="startLiveLocation()">📍 Find my live location</button><button class="secondary" onclick="stopLiveLocation()">Stop</button></div>
+  <div id="map-status" class="notice">Location sharing is optional. On Android, allow Location for SafeZone in your browser permissions.</div>
+  <div id="map-actions"></div>
+  <h2>Verified resources</h2>
+  {% for p in places %}<article class="resource"><strong>{{p['name']}}</strong><span>{{p['category']}} · {{p['area']}}</span>{% if p['phone'] %}<a href="tel:{{p['phone']}}">📞 {{p['phone']}}</a>{% endif %}{% if p['address'] %}<span>📍 {{p['address']}}</span><a target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query={{p['address']|urlencode}}">Open in Maps →</a>{% endif %}</article>{% endfor %}
+</section>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+/* Self-contained Leaflet layout CSS. The global site CSS must never resize Leaflet tiles. */
+#safety-map{width:100%;height:430px;min-height:430px;position:relative;overflow:hidden;background:#e5e5e5;border-radius:18px;border:1px solid var(--line);margin:15px 0;}
+#safety-map.leaflet-container{position:relative;overflow:hidden;outline:0;background:#ddd;font:12px/1.5 Helvetica Neue,Arial,Helvetica,sans-serif;}
+#safety-map .leaflet-pane,#safety-map .leaflet-tile,#safety-map .leaflet-marker-icon,#safety-map .leaflet-marker-shadow,#safety-map .leaflet-tile-container,#safety-map .leaflet-pane > svg,#safety-map .leaflet-pane > canvas,#safety-map .leaflet-zoom-box{position:absolute;left:0;top:0;}
+#safety-map .leaflet-map-pane{z-index:100;}
+#safety-map .leaflet-tile-pane{z-index:200;}
+#safety-map .leaflet-overlay-pane{z-index:400;}
+#safety-map .leaflet-shadow-pane{z-index:500;}
+#safety-map .leaflet-marker-pane{z-index:600;}
+#safety-map .leaflet-tooltip-pane{z-index:650;}
+#safety-map .leaflet-popup-pane{z-index:700;}
+#safety-map .leaflet-tile-container{white-space:nowrap;pointer-events:none;}
+#safety-map .leaflet-tile{width:256px!important;height:256px!important;max-width:none!important;max-height:none!important;border:0!important;padding:0!important;margin:0!important;user-select:none;-webkit-user-drag:none;visibility:hidden;display:block;}
+#safety-map .leaflet-tile-loaded{visibility:inherit;}
+#safety-map .leaflet-pane > svg,#safety-map .leaflet-pane > canvas{width:100%;height:100%;}
+#safety-map .leaflet-zoom-animated{transform-origin:0 0;}
+#safety-map .leaflet-control-container{position:absolute;left:0;right:0;top:0;bottom:0;pointer-events:none;z-index:800;}
+#safety-map .leaflet-top,#safety-map .leaflet-bottom{position:absolute;pointer-events:none;z-index:1000;}
+#safety-map .leaflet-top{top:0}.leaflet-bottom{bottom:0}.leaflet-left{left:0}.leaflet-right{right:0}
+#safety-map .leaflet-control{position:relative;z-index:800;pointer-events:auto;float:left;clear:both;margin-top:10px;}
+#safety-map .leaflet-right .leaflet-control{float:right;margin-right:10px;}
+#safety-map .leaflet-left .leaflet-control{margin-left:10px;}
+#safety-map .leaflet-control-zoom a{display:block;width:30px;height:30px;line-height:30px;text-align:center;text-decoration:none;background:#fff;color:#222;font-size:20px;font-weight:700;}
+#safety-map .leaflet-control-zoom a+a{border-top:1px solid #ddd;}
+#safety-map .leaflet-control-zoom{box-shadow:0 1px 5px rgba(0,0,0,.35);border-radius:4px;overflow:hidden;}
+#safety-map .leaflet-control-attribution{background:rgba(255,255,255,.8);padding:0 5px;color:#333;font-size:10px;line-height:18px;}
+#safety-map .leaflet-control-attribution a{color:#0078a8;text-decoration:none;}
+#safety-map .leaflet-marker-icon,#safety-map .leaflet-marker-shadow{display:block;}
+#safety-map .leaflet-marker-icon{margin-left:-12px;margin-top:-41px;}
+#safety-map .leaflet-popup{position:absolute;text-align:center;margin-bottom:20px;}
+#safety-map .leaflet-popup-content-wrapper{background:#fff;border-radius:12px;padding:1px;text-align:left;box-shadow:0 3px 14px rgba(0,0,0,.25);}
+#safety-map .leaflet-popup-content{margin:12px 14px;line-height:1.4;}
+#safety-map .leaflet-popup-tip{width:12px;height:12px;background:#fff;transform:rotate(45deg);margin:-7px auto 0;box-shadow:2px 2px 3px rgba(0,0,0,.1);}
+@media(max-width:520px){#safety-map{height:430px;min-height:430px;}}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+let map, meMarker, accuracyCircle, watchId=null;
+function setStatus(t){document.getElementById('map-status').textContent=t;}
+function initMap(){
+  map=L.map('safety-map',{zoomControl:true}).setView([-33.7984,25.4010],13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors'}).addTo(map);
+  setTimeout(()=>map.invalidateSize({pan:false}),150); setTimeout(()=>map.invalidateSize({pan:false}),700);
+}
+function showPosition(pos){
+  const lat=pos.coords.latitude, lon=pos.coords.longitude, acc=Math.round(pos.coords.accuracy||0);
+  if(meMarker) map.removeLayer(meMarker); if(accuracyCircle) map.removeLayer(accuracyCircle);
+  meMarker=L.marker([lat,lon]).addTo(map).bindPopup('📍 You are here').openPopup();
+  accuracyCircle=L.circle([lat,lon],{radius:pos.coords.accuracy||0}).addTo(map);
+  map.setView([lat,lon],17); map.invalidateSize();
+  setStatus('📍 Live location found. Accuracy: about '+acc+' m. Your location stays in this browser unless you choose to share it.');
+  document.getElementById('map-actions').innerHTML='<a class="secondary" target="_blank" rel="noopener" href="https://www.google.com/maps?q='+encodeURIComponent(lat+','+lon)+'">Open my current location in Google Maps</a>';
+}
+function locationError(err){
+  const msg={1:'Location permission was denied. On Android Chrome, tap the site controls beside the address bar → Permissions → Location → Allow, then reload SafeZone.',2:'Your phone could not determine a location. Turn on Android Location/GPS, move near a window or outdoors, and try again.',3:'Location timed out. Keep GPS/Location on and try again.'};
+  setStatus('⚠️ '+(msg[err.code]||'Unable to get your location.')+' Error code: '+err.code);
+}
+function startLiveLocation(){
+  if(!navigator.geolocation){setStatus('⚠️ This browser does not support location services.');return;}
+  stopLiveLocation(); setStatus('📍 Requesting GPS location…');
+  watchId=navigator.geolocation.watchPosition(showPosition,locationError,{enableHighAccuracy:true,timeout:30000,maximumAge:5000});
+}
+function stopLiveLocation(){if(watchId!==null){navigator.geolocation.clearWatch(watchId);watchId=null;setStatus('Location tracking stopped.');}}
+initMap();
+window.addEventListener('resize',()=>map.invalidateSize({pan:false})); window.addEventListener('orientationchange',()=>setTimeout(()=>map.invalidateSize({pan:false}),300)); document.addEventListener('visibilitychange',()=>{if(!document.hidden && map) setTimeout(()=>map.invalidateSize({pan:false}),250);});
+window.addEventListener('beforeunload',stopLiveLocation);
+</script>
+{% endblock %}

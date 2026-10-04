@@ -1,0 +1,60 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="section">
+  <div class="eyebrow">ADMIN CENTRE</div>
+  <h1>User Management</h1>
+  <p class="muted">Search members, check membership expiry, manage access and review the last 10 EFT payment records.</p>
+  <p><a class="secondary" href="{{url_for('admin')}}">← Back to Admin Centre</a></p>
+
+  <form class="form" method="get" action="{{url_for('admin_users')}}">
+    <input name="q" value="{{q}}" placeholder="Search name, email or town">
+    <button class="primary">Search</button>
+    {% if q %}<a class="secondary" href="{{url_for('admin_users')}}">Clear</a>{% endif %}
+  </form>
+
+  {% if not users %}
+    <div class="empty">No members matched your search.</div>
+  {% endif %}
+
+  {% for item in users %}
+    {% set u=item.user %}{% set s=item.sub %}
+    <article class="alert">
+      <span class="badge">{{s['status']|upper}}</span>
+      {% if s['access_enabled'] %}<span class="badge">ACCESS ON</span>{% else %}<span class="badge">ACCESS OFF</span>{% endif %}
+      <span class="badge">{{u['area']}}</span>
+      <h2>{{u['name']}}</h2>
+      <p><strong>Email:</strong> {{u['email']}}</p>
+      <p><strong>Joined:</strong> {{u['created_at']}}</p>
+      <p><strong>Paid until:</strong> {{s['paid_until'] or 'No payment recorded'}}</p>
+      <p><strong>Last EFT:</strong> {{s['last_payment_at'] or 'Never'}}</p>
+
+      <div class="moderate">
+        <form method="post" action="{{url_for('admin_user_action',user_id=u['id'])}}">
+          <input type="hidden" name="_csrf" value="{{csrf_token}}">
+          <input type="hidden" name="q" value="{{q}}">
+          <input name="reference" placeholder="EFT reference / proof ID" style="max-width:240px">
+          <button class="verify" name="action" value="paid">✓ EFT Paid — 30 Days</button>
+          <button class="verify" name="action" value="activate">Access ON</button>
+          <button class="reject" name="action" value="deactivate">Access OFF</button>
+          <button class="secondary" name="action" value="extend">+30 Days</button>
+        </form>
+      </div>
+
+      <details>
+        <summary><strong>Payment history</strong> — last 10 records</summary>
+        {% if item.payments %}
+          {% for p in item.payments %}
+            <div class="payment-row" style="margin-top:10px">
+              <span>{{p['created_at']}} · {{p['event_type']}}</span>
+              <strong>R{{'%.2f'|format((p['amount'] or 0)/100)}} · {{p['status'] or '—'}}</strong>
+            </div>
+            <small>Reference: {{p['reference'] or '—'}}</small>
+          {% endfor %}
+        {% else %}
+          <p class="muted">No payment records yet.</p>
+        {% endif %}
+      </details>
+    </article>
+  {% endfor %}
+</section>
+{% endblock %}

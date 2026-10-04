@@ -1,0 +1,9 @@
+{% extends 'base.html' %}{% block content %}<section class="section auth"><div class="eyebrow">SAFEZONE MEMBERSHIP</div><h1>SafeZone Membership</h1><div class="price-card"><div class="price">R99<span>/30 days</span></div><p>SafeZone uses simple EFT payments while we get started. Your membership gives you 30 days of access.</p><ul><li>📢 Town-specific Community Alerts</li><li>👥 Trusted Circle</li><li>🟢 Safety Check-ins</li><li>⚠️ Community reporting</li><li>🗺️ Safety Map & local resources</li></ul></div><div class="payment-card">
+<h2>Pay by EFT</h2>
+<div class="payment-row"><span>Account name</span><strong>{{eft_details.account_name}}</strong></div>
+<div class="payment-row"><span>Bank</span><strong>{{eft_details.bank}}</strong></div>
+<div class="payment-row"><span>Account number</span><strong>{{eft_details.account_number}}</strong></div>
+<div class="payment-row"><span>Reference</span><strong>{{eft_details.reference}}</strong></div>
+<div class="payment-amount">R99 <small>for 30 days</small></div>
+</div>
+<div class="notice"><b>How it works</b><br>Pay R99 by EFT using the details above. Use your <strong>name and surname</strong> as the payment reference, then send your proof of payment to SafeZone management. Once payment is confirmed, management will activate your account for 30 days.</div><div class="notice">🚨 Emergency numbers and the emergency page remain available without a membership.</div></section>{% endblock %}
