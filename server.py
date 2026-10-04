@@ -95,77 +95,103 @@ def db():
 def now(): return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 def init_db():
-    c = db()
-    c.execute("""CREATE TABLE IF NOT EXISTS users (
-      id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL,
-      password TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user', area TEXT DEFAULT 'Despatch', created_at TEXT NOT NULL
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS contacts (
-      id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, name TEXT NOT NULL,
-      phone TEXT NOT NULL, relation TEXT, created_at TEXT NOT NULL, email TEXT, linked_user_id BIGINT,
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS alerts (
-      id BIGSERIAL PRIMARY KEY, user_id BIGINT, category TEXT NOT NULL, area TEXT NOT NULL,
-      title TEXT NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Reported — Unverified',
-      created_at TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id)
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS checkins (
-      id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, area TEXT,
-      latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, created_at TEXT NOT NULL,
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS safety_journeys (
-      id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, destination TEXT NOT NULL,
-      expected_at TEXT NOT NULL, started_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active',
-      completed_at TEXT, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS emergency_events (
-      id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION,
-      status TEXT NOT NULL DEFAULT 'ACTIVE', created_at TEXT NOT NULL, resolved_at TEXT,
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS subscriptions (
-      id BIGSERIAL PRIMARY KEY, user_id BIGINT UNIQUE NOT NULL, status TEXT NOT NULL DEFAULT 'inactive',
-      gateway TEXT NOT NULL DEFAULT 'eft', amount INTEGER NOT NULL DEFAULT 9900, started_at TEXT,
-      paid_until TEXT, last_payment_at TEXT, cancelled_at TEXT, access_enabled INTEGER NOT NULL DEFAULT 0,
-      manual_override INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS payment_events (
-      id BIGSERIAL PRIMARY KEY, user_id BIGINT, event_type TEXT NOT NULL, reference TEXT, amount INTEGER,
-      status TEXT, payload TEXT, created_at TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id)
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS trusted_links (
-      id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, trusted_user_id BIGINT NOT NULL,
-      created_at TEXT NOT NULL, UNIQUE(user_id, trusted_user_id),
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY(trusted_user_id) REFERENCES users(id) ON DELETE CASCADE
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS push_subscriptions (
-      id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, endpoint TEXT UNIQUE NOT NULL,
-      p256dh TEXT NOT NULL, auth TEXT NOT NULL, created_at TEXT NOT NULL,
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    )""")
-    c.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS paid_until TEXT")
-    c.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS access_enabled INTEGER NOT NULL DEFAULT 0")
-    c.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS manual_override INTEGER NOT NULL DEFAULT 0")
-    c.execute("ALTER TABLE contacts ADD COLUMN IF NOT EXISTS email TEXT")
-    c.execute("ALTER TABLE contacts ADD COLUMN IF NOT EXISTS linked_user_id BIGINT")
-    c.execute("UPDATE subscriptions SET gateway='eft' WHERE gateway IS NULL OR gateway!='eft'")
-    admin_username = os.environ.get('ADMIN_USERNAME', 'Elandre007').strip()
-    admin_password = os.environ.get('ADMIN_PASSWORD', 'Tysonboesman123')
-    admin_count = c.execute("SELECT COUNT(*) n FROM users WHERE role='admin'").fetchone()['n']
-    if admin_count == 0 and c.execute('SELECT COUNT(*) n FROM users').fetchone()['n'] == 0:
-        c.execute('INSERT INTO users(name,email,password,role,area,created_at) VALUES(?,?,?,?,?,?)',
-                  ('SafeZone Admin',admin_username,generate_password_hash(admin_password),'admin','Despatch',now()))
-    else:
-        legacy = c.execute("SELECT id FROM users WHERE role='admin' AND (email='admin@safezone.local' OR email='Elandre007') LIMIT 1").fetchone()
-        if legacy and legacy['id']:
-            c.execute("UPDATE users SET email=?, password=? WHERE id=?",
-                      (admin_username, generate_password_hash(admin_password), legacy['id']))
-    c.commit(); c.close()
+    """Initialize the PostgreSQL schema safely when multiple Gunicorn workers/instances start.
 
+    Render/Supabase can have a short PostgreSQL statement timeout. Database migrations
+    such as ALTER TABLE may need to wait briefly for another startup process. Disable
+    statement/lock timeouts for this startup migration and serialize schema changes
+    with a PostgreSQL advisory lock. The lock is session-scoped and is released when
+    the connection is returned/closed, so this does not affect normal application use.
+    """
+    c = db()
+    migration_lock = 7461530921
+    try:
+        # Supabase/managed Postgres can impose a short default statement timeout.
+        # Startup migrations must be allowed to wait for DDL locks when necessary.
+        c.execute("SET statement_timeout = 0")
+        c.execute("SET lock_timeout = 0")
+        c.execute("SELECT pg_advisory_lock(?)", (migration_lock,))
+
+        c.execute("""CREATE TABLE IF NOT EXISTS users (
+          id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL,
+          password TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user', area TEXT DEFAULT 'Despatch', created_at TEXT NOT NULL
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS contacts (
+          id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, name TEXT NOT NULL,
+          phone TEXT NOT NULL, relation TEXT, created_at TEXT NOT NULL, email TEXT, linked_user_id BIGINT,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS alerts (
+          id BIGSERIAL PRIMARY KEY, user_id BIGINT, category TEXT NOT NULL, area TEXT NOT NULL,
+          title TEXT NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Reported — Unverified',
+          created_at TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id)
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS checkins (
+          id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, area TEXT,
+          latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, created_at TEXT NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS safety_journeys (
+          id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, destination TEXT NOT NULL,
+          expected_at TEXT NOT NULL, started_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active',
+          completed_at TEXT, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS emergency_events (
+          id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION,
+          status TEXT NOT NULL DEFAULT 'ACTIVE', created_at TEXT NOT NULL, resolved_at TEXT,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS subscriptions (
+          id BIGSERIAL PRIMARY KEY, user_id BIGINT UNIQUE NOT NULL, status TEXT NOT NULL DEFAULT 'inactive',
+          gateway TEXT NOT NULL DEFAULT 'eft', amount INTEGER NOT NULL DEFAULT 9900, started_at TEXT,
+          paid_until TEXT, last_payment_at TEXT, cancelled_at TEXT, access_enabled INTEGER NOT NULL DEFAULT 0,
+          manual_override INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS payment_events (
+          id BIGSERIAL PRIMARY KEY, user_id BIGINT, event_type TEXT NOT NULL, reference TEXT, amount INTEGER,
+          status TEXT, payload TEXT, created_at TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id)
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS trusted_links (
+          id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, trusted_user_id BIGINT NOT NULL,
+          created_at TEXT NOT NULL, UNIQUE(user_id, trusted_user_id),
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY(trusted_user_id) REFERENCES users(id) ON DELETE CASCADE
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS push_subscriptions (
+          id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, endpoint TEXT UNIQUE NOT NULL,
+          p256dh TEXT NOT NULL, auth TEXT NOT NULL, created_at TEXT NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )""")
+
+        # These are kept for databases created by older SafeZone versions.
+        # The CREATE TABLE definitions above already include them for new databases.
+        c.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS paid_until TEXT")
+        c.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS access_enabled INTEGER NOT NULL DEFAULT 0")
+        c.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS manual_override INTEGER NOT NULL DEFAULT 0")
+        c.execute("ALTER TABLE contacts ADD COLUMN IF NOT EXISTS email TEXT")
+        c.execute("ALTER TABLE contacts ADD COLUMN IF NOT EXISTS linked_user_id BIGINT")
+        c.execute("UPDATE subscriptions SET gateway='eft' WHERE gateway IS NULL OR gateway!='eft'")
+
+        admin_username = os.environ.get('ADMIN_USERNAME', 'Elandre007').strip()
+        admin_password = os.environ.get('ADMIN_PASSWORD', 'Tysonboesman123')
+        admin_count = c.execute("SELECT COUNT(*) n FROM users WHERE role='admin'").fetchone()['n']
+        if admin_count == 0 and c.execute('SELECT COUNT(*) n FROM users').fetchone()['n'] == 0:
+            c.execute('INSERT INTO users(name,email,password,role,area,created_at) VALUES(?,?,?,?,?,?)',
+                      ('SafeZone Admin',admin_username,generate_password_hash(admin_password),'admin','Despatch',now()))
+        else:
+            legacy = c.execute("SELECT id FROM users WHERE role='admin' AND (email='admin@safezone.local' OR email='Elandre007') LIMIT 1").fetchone()
+            if legacy and legacy['id']:
+                c.execute("UPDATE users SET email=?, password=? WHERE id=?",
+                          (admin_username, generate_password_hash(admin_password), legacy['id']))
+        c.commit()
+    finally:
+        try:
+            # Explicit release before returning the pooled connection.
+            c.execute("SELECT pg_advisory_unlock(?)", (migration_lock,))
+        except Exception:
+            pass
+        c.close()
 
 def current_user():
     if not session.get('user_id'): return None
