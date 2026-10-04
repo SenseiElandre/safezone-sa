@@ -2,11 +2,15 @@ from flask import Flask, render_template, request, redirect, url_for, session, j
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 from datetime import datetime, timedelta
-import sqlite3, os, json, secrets, time
+import os, json, secrets, time
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from psycopg2.pool import SimpleConnectionPool
 from urllib.parse import quote
 
 BASE = os.path.dirname(__file__)
-DB = os.path.join(BASE, 'safezone.db')
+DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
+_db_pool = None
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY') or 'dev-only-change-this-secret'
 app.config['MAX_CONTENT_LENGTH'] = 1 * 1024 * 1024
@@ -44,100 +48,99 @@ TOWNS = [
     'Somerset East', 'Graaff-Reinet', 'Cradock', 'Other'
 ]
 
+def _database_url():
+    if not DATABASE_URL:
+        raise RuntimeError('DATABASE_URL is not configured. SafeZone production requires a persistent PostgreSQL database.')
+    if 'sslmode=' not in DATABASE_URL:
+        return DATABASE_URL + ('&' if '?' in DATABASE_URL else '?') + 'sslmode=require'
+    return DATABASE_URL
+
+
+class PGConnection:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, params=None):
+        sql = sql.replace('?', '%s')
+        cur = self._conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(sql, params or ())
+        return cur
+
+    def commit(self): self._conn.commit()
+    def rollback(self): self._conn.rollback()
+
+    def close(self):
+        global _db_pool
+        if self._conn is not None:
+            try:
+                self._conn.rollback()
+            finally:
+                _db_pool.putconn(self._conn)
+                self._conn = None
+
+
 def db():
-    c = sqlite3.connect(DB)
-    c.row_factory = sqlite3.Row
-    return c
+    global _db_pool
+    if _db_pool is None:
+        _db_pool = SimpleConnectionPool(1, 8, _database_url())
+    return PGConnection(_db_pool.getconn())
+
 
 def now(): return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 def init_db():
     c = db()
-    c.executescript('''
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL,
+    c.execute("""CREATE TABLE IF NOT EXISTS users (
+      id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL,
       password TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user', area TEXT DEFAULT 'Despatch', created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS contacts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL,
-      phone TEXT NOT NULL, relation TEXT, created_at TEXT NOT NULL,
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS contacts (
+      id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, name TEXT NOT NULL,
+      phone TEXT NOT NULL, relation TEXT, created_at TEXT NOT NULL, email TEXT, linked_user_id BIGINT,
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-    CREATE TABLE IF NOT EXISTS alerts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, category TEXT NOT NULL, area TEXT NOT NULL,
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS alerts (
+      id BIGSERIAL PRIMARY KEY, user_id BIGINT, category TEXT NOT NULL, area TEXT NOT NULL,
       title TEXT NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Reported — Unverified',
       created_at TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id)
-    );
-    CREATE TABLE IF NOT EXISTS checkins (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, area TEXT,
-      latitude REAL, longitude REAL, created_at TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id)
-    );
-    CREATE TABLE IF NOT EXISTS safety_journeys (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      destination TEXT NOT NULL,
-      expected_at TEXT NOT NULL,
-      started_at TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'active',
-      completed_at TEXT,
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS checkins (
+      id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, area TEXT,
+      latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, created_at TEXT NOT NULL,
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-    CREATE TABLE IF NOT EXISTS emergency_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, latitude REAL, longitude REAL,
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS safety_journeys (
+      id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, destination TEXT NOT NULL,
+      expected_at TEXT NOT NULL, started_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active',
+      completed_at TEXT, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS emergency_events (
+      id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION,
       status TEXT NOT NULL DEFAULT 'ACTIVE', created_at TEXT NOT NULL, resolved_at TEXT,
-      FOREIGN KEY(user_id) REFERENCES users(id)
-    );
-    CREATE TABLE IF NOT EXISTS subscriptions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER UNIQUE NOT NULL,
-      status TEXT NOT NULL DEFAULT 'inactive',
-      gateway TEXT NOT NULL DEFAULT 'eft',
-      amount INTEGER NOT NULL DEFAULT 9900,
-      started_at TEXT,
-      paid_until TEXT,
-      last_payment_at TEXT,
-      cancelled_at TEXT,
-      access_enabled INTEGER NOT NULL DEFAULT 0,
-      updated_at TEXT NOT NULL,
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-    CREATE TABLE IF NOT EXISTS payment_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
-      event_type TEXT NOT NULL,
-      reference TEXT,
-      amount INTEGER,
-      status TEXT,
-      payload TEXT,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY(user_id) REFERENCES users(id)
-    );
-    ''')
-    existing_cols = {r['name'] for r in c.execute('PRAGMA table_info(subscriptions)').fetchall()}
-    for col, sql in {
-        'paid_until': 'ALTER TABLE subscriptions ADD COLUMN paid_until TEXT',
-        'access_enabled': 'ALTER TABLE subscriptions ADD COLUMN access_enabled INTEGER NOT NULL DEFAULT 0',
-        'manual_override': 'ALTER TABLE subscriptions ADD COLUMN manual_override INTEGER NOT NULL DEFAULT 0',
-    }.items():
-        if col not in existing_cols:
-            c.execute(sql)
-    # v14: link trusted-circle members who also have SafeZone accounts.
-    contact_cols = {r['name'] for r in c.execute('PRAGMA table_info(contacts)').fetchall()}
-    for col, sql in {
-        'email': 'ALTER TABLE contacts ADD COLUMN email TEXT',
-        'linked_user_id': 'ALTER TABLE contacts ADD COLUMN linked_user_id INTEGER',
-    }.items():
-        if col not in contact_cols:
-            c.execute(sql)
-    c.execute('''CREATE TABLE IF NOT EXISTS trusted_links (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        trusted_user_id INTEGER NOT NULL,
-        created_at TEXT NOT NULL,
-        UNIQUE(user_id, trusted_user_id),
-        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
-        FOREIGN KEY(trusted_user_id) REFERENCES users(id) ON DELETE CASCADE
-    )''')
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS subscriptions (
+      id BIGSERIAL PRIMARY KEY, user_id BIGINT UNIQUE NOT NULL, status TEXT NOT NULL DEFAULT 'inactive',
+      gateway TEXT NOT NULL DEFAULT 'eft', amount INTEGER NOT NULL DEFAULT 9900, started_at TEXT,
+      paid_until TEXT, last_payment_at TEXT, cancelled_at TEXT, access_enabled INTEGER NOT NULL DEFAULT 0,
+      manual_override INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS payment_events (
+      id BIGSERIAL PRIMARY KEY, user_id BIGINT, event_type TEXT NOT NULL, reference TEXT, amount INTEGER,
+      status TEXT, payload TEXT, created_at TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id)
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS trusted_links (
+      id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, trusted_user_id BIGINT NOT NULL,
+      created_at TEXT NOT NULL, UNIQUE(user_id, trusted_user_id),
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(trusted_user_id) REFERENCES users(id) ON DELETE CASCADE
+    )""")
+    c.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS paid_until TEXT")
+    c.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS access_enabled INTEGER NOT NULL DEFAULT 0")
+    c.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS manual_override INTEGER NOT NULL DEFAULT 0")
+    c.execute("ALTER TABLE contacts ADD COLUMN IF NOT EXISTS email TEXT")
+    c.execute("ALTER TABLE contacts ADD COLUMN IF NOT EXISTS linked_user_id BIGINT")
     c.execute("UPDATE subscriptions SET gateway='eft' WHERE gateway IS NULL OR gateway!='eft'")
     admin_username = os.environ.get('ADMIN_USERNAME', 'Elandre007').strip()
     admin_password = os.environ.get('ADMIN_PASSWORD', 'Tysonboesman123')
@@ -146,12 +149,12 @@ def init_db():
         c.execute('INSERT INTO users(name,email,password,role,area,created_at) VALUES(?,?,?,?,?,?)',
                   ('SafeZone Admin',admin_username,generate_password_hash(admin_password),'admin','Despatch',now()))
     else:
-        # One-time migration from the original email-style admin login.
         legacy = c.execute("SELECT id FROM users WHERE role='admin' AND (email='admin@safezone.local' OR email='Elandre007') LIMIT 1").fetchone()
         if legacy and legacy['id']:
             c.execute("UPDATE users SET email=?, password=? WHERE id=?",
                       (admin_username, generate_password_hash(admin_password), legacy['id']))
     c.commit(); c.close()
+
 
 def current_user():
     if not session.get('user_id'): return None
@@ -273,10 +276,10 @@ def register():
         if not name or not email or len(pw)<8: flash('Please complete all fields. Password must be at least 8 characters.','error'); return render_template('register.html')
         c=db()
         try:
-            cur=c.execute('INSERT INTO users(name,email,password,area,created_at) VALUES(?,?,?,?,?)',(name,email,generate_password_hash(pw),area,now())); c.commit(); session['user_id']=cur.lastrowid
-            ensure_subscription(cur.lastrowid)
+            cur=c.execute('INSERT INTO users(name,email,password,area,created_at) VALUES(?,?,?,?,?) RETURNING id',(name,email,generate_password_hash(pw),area,now())); user_id=cur.fetchone()['id']; c.commit(); session['user_id']=user_id
+            ensure_subscription(user_id)
             return redirect(url_for('subscription_page'))
-        except sqlite3.IntegrityError: flash('That email is already registered.','error')
+        except psycopg2.IntegrityError: flash('That email is already registered.','error')
         finally: c.close()
     return render_template('register.html')
 
@@ -321,7 +324,7 @@ def admin_security():
             c.execute('UPDATE users SET name=?, email=?, password=? WHERE id=?', (new_name, new_username, generate_password_hash(new_password), u['id']))
             c.commit()
             flash('Admin login details updated successfully.','success')
-        except sqlite3.IntegrityError:
+        except psycopg2.IntegrityError:
             flash('That username is already in use.','error')
         finally:
             c.close()
@@ -365,8 +368,8 @@ def contacts():
                       (u['id'],name,phone,relation,email,linked_user['id'] if linked_user else None,now()))
         if linked_user:
             # Mutual safety link: both members can see each other's latest Safe check-in.
-            c.execute('INSERT OR IGNORE INTO trusted_links(user_id,trusted_user_id,created_at) VALUES(?,?,?)',(u['id'],linked_user['id'],now()))
-            c.execute('INSERT OR IGNORE INTO trusted_links(user_id,trusted_user_id,created_at) VALUES(?,?,?)',(linked_user['id'],u['id'],now()))
+            c.execute('INSERT INTO trusted_links(user_id,trusted_user_id,created_at) VALUES(?,?,?) ON CONFLICT (user_id,trusted_user_id) DO NOTHING',(u['id'],linked_user['id'],now()))
+            c.execute('INSERT INTO trusted_links(user_id,trusted_user_id,created_at) VALUES(?,?,?) ON CONFLICT (user_id,trusted_user_id) DO NOTHING',(linked_user['id'],u['id'],now()))
             flash(f'{linked_user["name"]} is a SafeZone member. Mutual safety check-ins are now linked.','success')
         else:
             flash('Trusted contact added. Add their SafeZone account email if you want mutual safety check-ins.','success')
@@ -377,7 +380,7 @@ def contacts():
                               (SELECT latitude FROM checkins ch WHERE ch.user_id=u.id ORDER BY ch.id DESC LIMIT 1) AS latitude,
                               (SELECT longitude FROM checkins ch WHERE ch.user_id=u.id ORDER BY ch.id DESC LIMIT 1) AS longitude
                        FROM trusted_links tl JOIN users u ON u.id=tl.trusted_user_id
-                       WHERE tl.user_id=? ORDER BY u.name COLLATE NOCASE''',(u['id'],)).fetchall()
+                       WHERE tl.user_id=? ORDER BY u.name''',(u['id'],)).fetchall()
     own=c.execute('SELECT created_at,latitude,longitude FROM checkins WHERE user_id=? ORDER BY id DESC LIMIT 1',(u['id'],)).fetchone()
     c.close(); return render_template('contacts.html',contacts=rows,links=links,own_checkin=own)
 
@@ -403,13 +406,13 @@ def emergency_start():
     u=current_user()
     if not u: return jsonify(ok=False,message='Please log in first.'),401
     if rate_limited(f'emergency:{u["id"]}',3,300): return jsonify(ok=False,message='Please wait before starting another emergency event.'),429
-    data=request.get_json(silent=True) or {}; lat=data.get('latitude'); lon=data.get('longitude'); c=db(); cur=c.execute('INSERT INTO emergency_events(user_id,latitude,longitude,created_at) VALUES(?,?,?,?)',(u['id'],lat,lon,now())); contacts=c.execute('SELECT name,phone,relation FROM contacts WHERE user_id=? ORDER BY id',(u['id'],)).fetchall(); c.commit(); c.close()
+    data=request.get_json(silent=True) or {}; lat=data.get('latitude'); lon=data.get('longitude'); c=db(); cur=c.execute('INSERT INTO emergency_events(user_id,latitude,longitude,created_at) VALUES(?,?,?,?) RETURNING id',(u['id'],lat,lon,now())); event_id=cur.fetchone()['id']; contacts=c.execute('SELECT name,phone,relation FROM contacts WHERE user_id=? ORDER BY id',(u['id'],)).fetchall(); c.commit(); c.close()
     location=f'https://www.google.com/maps?q={lat},{lon}' if lat is not None and lon is not None else ''
     message=f'SAFEZONE SA EMERGENCY: {u["name"]} may need help. Location: {location}' if location else f'SAFEZONE SA EMERGENCY: {u["name"]} may need help. Please contact them immediately.'
     notified=[]
     for x in contacts:
         phone=''.join(ch for ch in x['phone'] if ch.isdigit() or ch=='+'); sms=f'sms:{phone}?body='+quote(message); wa='https://wa.me/'+''.join(ch for ch in phone if ch.isdigit())+'?text='+quote(message); notified.append({'name':x['name'],'phone':x['phone'],'sms':sms,'whatsapp':wa})
-    return jsonify(ok=True,event_id=cur.lastrowid,message='Emergency mode activated.',numbers=EMERGENCY,contacts=notified,location=location)
+    return jsonify(ok=True,event_id=event_id,message='Emergency mode activated.',numbers=EMERGENCY,contacts=notified,location=location)
 
 @app.post('/api/emergency/resolve')
 @login_required
@@ -430,7 +433,7 @@ def circle_status():
                              (SELECT ch.latitude FROM checkins ch WHERE ch.user_id=u.id ORDER BY ch.id DESC LIMIT 1) AS latitude,
                              (SELECT ch.longitude FROM checkins ch WHERE ch.user_id=u.id ORDER BY ch.id DESC LIMIT 1) AS longitude
                       FROM trusted_links tl JOIN users u ON u.id=tl.trusted_user_id
-                      WHERE tl.user_id=? ORDER BY u.name COLLATE NOCASE''',(u['id'],)).fetchall()
+                      WHERE tl.user_id=? ORDER BY u.name''',(u['id'],)).fetchall()
     own=c.execute('SELECT created_at,latitude,longitude FROM checkins WHERE user_id=? ORDER BY id DESC LIMIT 1',(u['id'],)).fetchone(); c.close()
     def item(r):
         return {'id':r['id'],'name':r['name'],'email':r['email'],'area':r['area'],'last_checkin':r['last_checkin'],'latitude':r['latitude'],'longitude':r['longitude']}
@@ -572,9 +575,9 @@ def admin_users():
     c=db()
     if q:
         like=f'%{q}%'
-        rows=c.execute("SELECT u.*, s.status sub_status, s.paid_until, s.last_payment_at, s.access_enabled FROM users u LEFT JOIN subscriptions s ON s.user_id=u.id WHERE u.role!='admin' AND (u.name LIKE ? OR u.email LIKE ? OR u.area LIKE ?) ORDER BY u.name COLLATE NOCASE",(like,like,like)).fetchall()
+        rows=c.execute("SELECT u.*, s.status sub_status, s.paid_until, s.last_payment_at, s.access_enabled FROM users u LEFT JOIN subscriptions s ON s.user_id=u.id WHERE u.role!='admin' AND (u.name LIKE ? OR u.email LIKE ? OR u.area LIKE ?) ORDER BY u.name",(like,like,like)).fetchall()
     else:
-        rows=c.execute("SELECT u.*, s.status sub_status, s.paid_until, s.last_payment_at, s.access_enabled FROM users u LEFT JOIN subscriptions s ON s.user_id=u.id WHERE u.role!='admin' ORDER BY u.name COLLATE NOCASE").fetchall()
+        rows=c.execute("SELECT u.*, s.status sub_status, s.paid_until, s.last_payment_at, s.access_enabled FROM users u LEFT JOIN subscriptions s ON s.user_id=u.id WHERE u.role!='admin' ORDER BY u.name").fetchall()
     users=[]
     for u in rows:
         ensure_subscription(u['id'])
