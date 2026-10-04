@@ -337,7 +337,7 @@ def contacts():
             c.close(); return redirect(url_for('contacts'))
         linked_user=None
         if email:
-            linked_user=c.execute('SELECT id,name,email FROM users WHERE lower(email)=lower(?) AND role!='admin'',(email,)).fetchone()
+            linked_user=c.execute("SELECT id,name,email FROM users WHERE lower(email)=lower(?) AND role!='admin'", (email,)).fetchone()
             if linked_user and linked_user['id']==u['id']:
                 linked_user=None
                 flash('You cannot add yourself to your own Trusted Circle.','error')
@@ -437,12 +437,16 @@ def report():
 @app.route('/resources')
 @subscription_required
 def resources():
-    u=current_user(); town=u['area'].strip() or 'Despatch'; c=db(); rows=c.execute("SELECT * FROM resources WHERE verified=1 AND (lower(area)=lower(?) OR lower(area)='south africa') ORDER BY category,name",(town,)).fetchall(); c.close(); return render_template('resources.html',places=rows,town=town)
+    # Local emergency-service locations have been removed because SafeZone does not
+    # want to publish potentially inaccurate addresses. Emergency numbers remain
+    # available from the Emergency page.
+    return redirect(url_for('emergency'))
 
 @app.route('/map')
-@subscription_required
-def safety_map():
-    u=current_user(); town=u['area'].strip() or 'Despatch'; c=db(); rows=c.execute("SELECT * FROM resources WHERE verified=1 AND (lower(area)=lower(?) OR lower(area)='south africa') ORDER BY category,name",(town,)).fetchall(); c.close(); return render_template('map.html',places=rows,town=town)
+def removed_map():
+    # The map feature has been removed from SafeZone. Keep this redirect so old
+    # bookmarks/links do not produce a broken page.
+    return redirect(url_for('home'))
 
 @app.route('/safety')
 def safety_tips(): return render_template('safety_tips.html')
@@ -459,7 +463,6 @@ def profile():
         c=db(); c.execute('UPDATE users SET area=? WHERE id=?',(area,u['id'])); c.commit(); c.close(); flash('Your town has been updated.','success'); return redirect(url_for('profile'))
     return render_template('profile.html')
 
-app.add_url_rule('/map', endpoint='map', view_func=safety_map)
 
 @app.route('/admin')
 @admin_required
@@ -573,11 +576,6 @@ def admin_subscription(user_id):
 @admin_required
 def moderate_alert(aid):
     status=request.form.get('status','Verified'); c=db(); c.execute('UPDATE alerts SET status=? WHERE id=?',(status,aid)); c.commit(); c.close(); return redirect(url_for('admin'))
-
-@app.post('/admin/resource')
-@admin_required
-def add_resource():
-    f=request.form; c=db(); c.execute('INSERT INTO resources(name,category,area,phone,address,verified) VALUES(?,?,?,?,?,1)',(f['name'],f['category'],f['area'],f.get('phone'),f.get('address'))); c.commit(); c.close(); return redirect(url_for('resources'))
 
 @app.errorhandler(404)
 def not_found(e): return render_template('404.html'),404
