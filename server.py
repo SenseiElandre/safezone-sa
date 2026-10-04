@@ -538,7 +538,7 @@ def emergency_start():
         linked_targets=[]
         if selected:
             linked_targets=c.execute("""SELECT DISTINCT u.id,u.name FROM contacts ct JOIN users u ON u.id=ct.linked_user_id
-                                        WHERE ct.user_id=? AND ct.linked_user_id IS NOT NULL AND ct.linked_user_id = ANY(?)""",(selected,)).fetchall()
+                                        WHERE ct.user_id=? AND ct.linked_user_id IS NOT NULL AND ct.linked_user_id = ANY(?)""",(u['id'], selected)).fetchall()
         c.commit()
     except Exception:
         if c:

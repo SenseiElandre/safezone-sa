@@ -1,4 +1,4 @@
-// SafeZone v32: persistent PWA service worker + emergency push alarms.
+// SafeZone v36: persistent PWA service worker + emergency push alarms.
 async function getLocation(){
   return new Promise(resolve=>{
     if(!navigator.geolocation) return resolve({});
@@ -34,6 +34,20 @@ async function registerEmergencyPush(){
     return true;
   }catch(e){console.error(e);alert('Could not enable emergency alarms. Please make sure notifications are allowed for SafeZone.');return false;}
 }
+async function testEmergencyPush(){
+  const status=document.getElementById('push-status');
+  if(status) status.innerHTML='<div class="notice">Sending a test alarm to this phone…</div>';
+  try{
+    const r=await fetch('/api/push/test-self',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.SAFEZONE_CSRF||''},cache:'no-store'});
+    let d={}; try{d=await r.json()}catch(e){}
+    if(!r.ok || !d.ok){ if(status) status.innerHTML='<div class="notice">⚠️ '+(d.message||('Test alarm failed. Server response: '+r.status+'.'))+'</div>'; return; }
+    if(status) status.innerHTML='<div class="notice">🔔 Test alarm sent. Check this phone for the SafeZone notification.</div>';
+  }catch(e){
+    console.error('SafeZone push self-test failed',e);
+    if(status) status.innerHTML='<div class="notice">⚠️ Could not send the test alarm. Please try again.</div>';
+  }
+}
+
 function urlBase64ToUint8Array(base64String){
   const padding='='.repeat((4-base64String.length%4)%4);
   const base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/');
@@ -64,4 +78,4 @@ async function resolveEmergency(){
   await fetch('/api/emergency/resolve',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.SAFEZONE_CSRF||''},body:JSON.stringify({event_id:id})});
   sessionStorage.removeItem('safezone_event'); location.reload();
 }
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/static/sw.js?v=33',{updateViaCache:'none'}).catch(()=>{});}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/static/sw.js?v=36',{updateViaCache:'none'}).catch(()=>{});}

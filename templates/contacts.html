@@ -18,7 +18,7 @@
     </article>
     {% else %}<div class="empty">No linked SafeZone members yet. Add a trusted person's SafeZone login email below to connect your circle.</div>{% endfor %}
   </div>
-  <button class="secondary" type="button" onclick="refreshCircle()">🔄 Refresh circle status</button>
+  <button id="refresh-circle-button" class="secondary" type="button">🔄 Refresh circle status</button>
 
   <h2>🕒 Active journeys</h2>
   <p class="muted">If someone in your circle is travelling, you'll see their expected arrival here. If they become overdue, you can check on them.</p>
@@ -64,7 +64,9 @@ async function refreshJourneys(){
     }).join('');
   }catch(e){box.innerHTML='<div class="empty">Unable to load active journeys right now.</div>';}
 }
+document.getElementById('refresh-circle-button')?.addEventListener('click', refreshCircle);
 refreshJourneys();
+refreshCircle();
 setInterval(refreshJourneys,15000);
 setInterval(refreshCircle,30000);
 </script>
