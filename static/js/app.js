@@ -1,3 +1,14 @@
+// SafeZone v20: remove legacy map/PWA caches and unregister old service workers.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', async () => {
+    try {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      for (const reg of regs) await reg.unregister();
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k)));
+    } catch (e) {}
+  });
+}
 async function getLocation(){
   return new Promise(resolve=>{
     if(!navigator.geolocation) return resolve({});
@@ -7,7 +18,7 @@ async function getLocation(){
 async function checkIn(){
   const loc=await getLocation();
   const r=await fetch('/api/checkin',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.SAFEZONE_CSRF||''},body:JSON.stringify(loc)});
-  const d=await r.json(); alert((d.ok?'🟢 ':'⚠️ ')+d.message);
+  const d=await r.json(); alert((d.ok?'🟢 ':'⚠️ ')+d.message+(d.checked_at?'\n\nLast updated: '+d.checked_at:''));
 }
 async function activateEmergency(){
   const status=document.getElementById('emergency-status');
