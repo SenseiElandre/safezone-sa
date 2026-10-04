@@ -9,6 +9,36 @@
   {% for p in places %}<article class="resource"><strong>{{p['name']}}</strong><span>{{p['category']}} · {{p['area']}}</span>{% if p['phone'] %}<a href="tel:{{p['phone']}}">📞 {{p['phone']}}</a>{% endif %}{% if p['address'] %}<span>📍 {{p['address']}}</span><a target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query={{p['address']|urlencode}}">Open in Maps →</a>{% endif %}</article>{% endfor %}
 </section>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+/* Leaflet layout fallback: keeps map tiles positioned correctly even if the CDN stylesheet is slow/blocked. */
+#safety-map.leaflet-container{position:relative;overflow:hidden;outline:0;-webkit-tap-highlight-color:transparent;background:#ddd;}
+#safety-map .leaflet-pane,#safety-map .leaflet-tile,#safety-map .leaflet-marker-icon,#safety-map .leaflet-marker-shadow,#safety-map .leaflet-tile-container{position:absolute;left:0;top:0;}
+#safety-map .leaflet-pane{z-index:400;}
+#safety-map .leaflet-tile-pane{z-index:200;}
+#safety-map .leaflet-overlay-pane{z-index:400;}
+#safety-map .leaflet-shadow-pane{z-index:500;}
+#safety-map .leaflet-marker-pane{z-index:600;}
+#safety-map .leaflet-tooltip-pane{z-index:650;}
+#safety-map .leaflet-popup-pane{z-index:700;}
+#safety-map .leaflet-map-pane svg,#safety-map .leaflet-map-pane canvas{position:absolute;left:0;top:0;}
+#safety-map .leaflet-tile-container{white-space:nowrap;}
+#safety-map .leaflet-tile{max-width:none!important;max-height:none!important;border:0;padding:0;}
+#safety-map .leaflet-control-container{position:absolute;left:0;right:0;top:0;pointer-events:none;z-index:800;}
+#safety-map .leaflet-top,#safety-map .leaflet-bottom{position:absolute;pointer-events:none;}
+#safety-map .leaflet-top{top:0}.leaflet-bottom{bottom:0}.leaflet-left{left:0}.leaflet-right{right:0}
+#safety-map .leaflet-control{position:relative;z-index:800;pointer-events:auto;float:left;clear:both;}
+#safety-map .leaflet-right .leaflet-control{float:right;}
+#safety-map .leaflet-top .leaflet-control{margin-top:10px;}
+#safety-map .leaflet-left .leaflet-control{margin-left:10px;}
+#safety-map .leaflet-right .leaflet-control{margin-right:10px;}
+#safety-map .leaflet-control-zoom a{display:block;width:30px;height:30px;line-height:30px;text-align:center;text-decoration:none;background:#fff;color:#222;font-size:20px;}
+#safety-map .leaflet-control-zoom a+a{border-top:1px solid #ddd;}
+#safety-map .leaflet-control-zoom{box-shadow:0 1px 5px rgba(0,0,0,.35);border-radius:4px;overflow:hidden;}
+#safety-map .leaflet-popup{position:absolute;text-align:center;bottom:0;left:-50%;}
+#safety-map .leaflet-popup-content-wrapper{background:#fff;border-radius:12px;padding:1px;text-align:left;box-shadow:0 3px 14px rgba(0,0,0,.25);}
+#safety-map .leaflet-popup-content{margin:12px 14px;line-height:1.4;}
+#safety-map .leaflet-popup-tip{width:12px;height:12px;background:#fff;transform:rotate(45deg);margin:-7px auto 0;box-shadow:2px 2px 3px rgba(0,0,0,.1);}
+</style>
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 let map, meMarker, accuracyCircle, watchId=null;
