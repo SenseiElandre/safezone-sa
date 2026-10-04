@@ -261,11 +261,15 @@ def admin_security():
     u=current_user()
     if request.method == 'POST':
         current_password = request.form.get('current_password','')
+        new_name = request.form.get('name','').strip()
         new_email = request.form.get('email','').strip().lower()
         new_password = request.form.get('new_password','')
         confirm_password = request.form.get('confirm_password','')
         if not check_password_hash(u['password'], current_password):
             flash('Current admin password is incorrect.','error')
+            return render_template('admin_security.html')
+        if len(new_name) < 2:
+            flash('Please enter a valid admin name.','error')
             return render_template('admin_security.html')
         if '@' not in new_email or '.' not in new_email.split('@')[-1]:
             flash('Please enter a valid admin email address.','error')
@@ -278,7 +282,7 @@ def admin_security():
             return render_template('admin_security.html')
         c=db()
         try:
-            c.execute('UPDATE users SET email=?, password=? WHERE id=?', (new_email, generate_password_hash(new_password), u['id']))
+            c.execute('UPDATE users SET name=?, email=?, password=? WHERE id=?', (new_name, new_email, generate_password_hash(new_password), u['id']))
             c.commit()
             flash('Admin login details updated successfully.','success')
         except sqlite3.IntegrityError:
