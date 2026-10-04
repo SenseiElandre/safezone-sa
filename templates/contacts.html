@@ -20,6 +20,10 @@
   </div>
   <button class="secondary" type="button" onclick="refreshCircle()">🔄 Refresh circle status</button>
 
+  <h2>🕒 Active journeys</h2>
+  <p class="muted">If someone in your circle is travelling, you'll see their expected arrival here. If they become overdue, you can check on them.</p>
+  <div id="circle-journeys"><div class="empty">No active journeys in your circle.</div></div>
+
   <h2>Add trusted person</h2>
   <form class="form" method="post"><input type="hidden" name="_csrf" value="{{csrf_token}}">
     <input name="name" placeholder="Contact name" required>
@@ -46,6 +50,22 @@ async function refreshCircle(){
   }catch(e){alert('Could not refresh the Trusted Circle right now.');}
 }
 function escapeHtml(v){return String(v??'').replace(/[&<>'"]/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[s]));}
+async function refreshJourneys(){
+  const box=document.getElementById('circle-journeys'); if(!box)return;
+  try{
+    const r=await fetch('/api/circle-journeys'); const d=await r.json();
+    if(!d.ok) throw new Error();
+    if(!d.journeys.length){box.innerHTML='<div class="empty">No active journeys in your circle.</div>';return;}
+    box.innerHTML=d.journeys.map(j=>{
+      const cls=j.overdue?'journey-card overdue-journey':'journey-card';
+      const status=j.overdue?'<span class="badge journey-badge-overdue">⚠️ OVERDUE</span>':'<span class="badge">🟠 ON THE WAY</span>';
+      const actions=(j.sms||j.whatsapp)?`<div class="button-row">${j.sms?`<a class="secondary mini" href="${j.sms}">📱 Check by SMS</a>`:''}${j.whatsapp?`<a class="secondary mini" target="_blank" rel="noopener" href="${j.whatsapp}">💬 Check on WhatsApp</a>`:''}</div>`:'';
+      return `<article class="${cls}">${status}<h3>${escapeHtml(j.name)}</h3><p>Going to <b>${escapeHtml(j.destination)}</b></p><p>Expected arrival: <b>${escapeHtml(j.expected_at)}</b></p>${actions}</article>`;
+    }).join('');
+  }catch(e){box.innerHTML='<div class="empty">Unable to load active journeys right now.</div>';}
+}
+refreshJourneys();
+setInterval(refreshJourneys,15000);
 setInterval(refreshCircle,30000);
 </script>
 {% endblock %}

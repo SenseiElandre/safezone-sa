@@ -1,0 +1,73 @@
+{% extends 'base.html' %}{% block content %}
+<section class="section">
+  <div class="eyebrow">SAFEZONE CHECK-IN</div>
+  <h1>Get there safely.</h1>
+  <p class="muted">Tell your Trusted Circle where you're going and when you expect to arrive. They can see the journey status and check on you if you don't arrive on time.</p>
+
+  <div id="journey-box">
+    {% if active %}
+    <div class="journey-card active-journey">
+      <span class="badge">🟠 JOURNEY ACTIVE</span>
+      <h2>Going to {{active['destination']}}</h2>
+      <p>Expected arrival: <b>{{active['expected_at']}}</b></p>
+      <p id="journey-countdown" class="journey-countdown">Checking time…</p>
+      <button class="primary" type="button" onclick="completeJourney()">🟢 I'M HERE — I'VE ARRIVED</button>
+    </div>
+    {% else %}
+    <div class="profile-card">
+      <b>🕒 Start a journey check-in</b>
+      <span>Your circle will see that you're travelling and your expected arrival time.</span>
+    </div>
+    <form class="form" onsubmit="startJourney(event)">
+      <input id="destination" placeholder="Where are you going? e.g. Home, work, school" required>
+      <select id="minutes">
+        <option value="15">15 minutes</option>
+        <option value="30" selected>30 minutes</option>
+        <option value="45">45 minutes</option>
+        <option value="60">1 hour</option>
+        <option value="90">1 hour 30 minutes</option>
+        <option value="120">2 hours</option>
+        <option value="180">3 hours</option>
+      </select>
+      <button class="primary">🟠 Start SafeZone Check-In</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <div class="notice">
+    <b>How it works</b><br>
+    Start the check-in before you leave. Your Trusted Circle can see the destination and expected arrival time. If you arrive safely, tap <b>I'm Here</b>. If the expected time passes, your circle will see the journey as <b>OVERDUE</b> and can check on you.
+  </div>
+</section>
+<script>
+function parseLocal(s){ return new Date(s.replace(' ','T')); }
+function updateCountdown(expected){
+  const el=document.getElementById('journey-countdown'); if(!el)return;
+  const target=parseLocal(expected);
+  function tick(){
+    const ms=target-new Date();
+    if(ms<=0){el.innerHTML='<span class="journey-overdue">⚠️ OVERDUE — Your expected arrival time has passed.</span>';return;}
+    const total=Math.floor(ms/1000), h=Math.floor(total/3600), m=Math.floor((total%3600)/60), sec=total%60;
+    el.textContent='Time remaining: '+(h?String(h).padStart(2,'0')+':':'')+String(m).padStart(2,'0')+':'+String(sec).padStart(2,'0');
+  }
+  tick(); setInterval(tick,1000);
+}
+{% if active %}updateCountdown({{active['expected_at']|tojson}});{% endif %}
+async function startJourney(e){
+  e.preventDefault();
+  const destination=document.getElementById('destination').value.trim();
+  const minutes=Number(document.getElementById('minutes').value);
+  const r=await fetch('/api/journey/start',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.SAFEZONE_CSRF||''},body:JSON.stringify({destination,minutes})});
+  const d=await r.json();
+  if(!d.ok){alert(d.message);return;}
+  alert('🟠 Journey check-in started. Your Trusted Circle can now see your expected arrival.');
+  location.reload();
+}
+async function completeJourney(){
+  const r=await fetch('/api/journey/complete',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.SAFEZONE_CSRF||''}});
+  const d=await r.json();
+  alert(d.message || "You're marked as safely arrived.");
+  location.reload();
+}
+</script>
+{% endblock %}

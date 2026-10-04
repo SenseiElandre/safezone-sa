@@ -9,3 +9,11 @@
 
 
 @media(max-width:520px){}
+
+.journey-card{background:#fff;border:1px solid var(--line);border-radius:17px;padding:18px;margin:10px 0}
+.journey-card h2,.journey-card h3{margin:9px 0 7px}
+.journey-countdown{font-size:24px;font-weight:900;margin:14px 0}
+.active-journey{border-left:5px solid #f59e0b}
+.overdue-journey{border:2px solid #ef9d9d;background:#fff5f5}
+.journey-overdue,.journey-badge-overdue{color:#a52323;font-weight:900}
+.journey-card .button-row{margin-bottom:0}
